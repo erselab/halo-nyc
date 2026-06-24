@@ -1,0 +1,125 @@
+v0.2 August 20, 2020
+====================================================
+The utils.py module was rewritten as a class, and the programs updates to use
+this class instead of the routines in utils.py.  The option of saving the H
+strip files in binary format was removed.  Those files will be saved as savez
+.npz files by default. Converted all usage in programs of optparse to argparse.
+
+v0.15.3 Aug 19, 2020
+====================================================
+Fixed a bug in hsplit.py when using python 3, where instead of summing up H
+values to get a single value for a given cell and timestep, it was storing
+multiple values for the cell and timestep.  However, the csr_matrix function
+that is used to create a sparse matrix from the H strip files did the summing,
+and the final matrix was the same in either case. So no actual problems would
+occur in an inversion.  This fix is to make sure the hsplit.py behaves the
+same with both python 2 and 3.
+
+v0.15.2 Oct 16, 2019
+====================================================
+Fixed method getSpriorNetcdf() in utils.py to convert the sprior variable that
+is stored in a netcdf file to a numpy.ndarray instead of a maskedArray.  Seems
+python 3 reads in the netcdf variable as a masked array, but the hq.py script
+needs it to be a ndarray, causing hq.py to crash.
+
+When running hq.py with the --multiprocs option, needed to convert the start
+and end time steps to integers.  They were floats in python 3.
+
+v0.15.1 Oct 3, 2019
+====================================================
+Change the shebang line for the python scripts to #!/usr/bin/env python to
+better handle different python environments.
+Removed Arlyn's boundary optimization code from the scripts since it is a
+special case and not normally used.
+
+v0.15 March 14, 2019
+====================================================
+no new capabilities, but revised code to work under either python 2 or 3.
+Converted all scripts to use optparse for option handling.
+For the hq step, the number of processes to use in the calculations is now
+an option on the command line, instead of a setting in the config file.
+
+v0.14.1 June 6, 2018
+====================================================
+mklm.py - Changed from getopt to optparse for command arguments.
+hq.py - Fixes to file paths for several files.  Was causing an error if user
+was not in the working directory when starting hq.
+
+v0.14 Oct 12, 2017
+====================================================
+Fixed a bug in hsplit.py where if the footprint domain was not the same size
+as the inversion domain, the wrong region would be used when extracting the
+footprint data out of the grid.  This required calling a new routine in
+utils.py 'extract_grid'.
+
+v0.13.1 Oct 11, 2017
+====================================================
+Added a try/except when trying to create a sparse matrix from an H strip file.
+If an exception occurs, an error message is printed and program stops.
+
+Fixed bug in hsplit.py.  When converting the temporary text files to .npz
+files, it now correctly formats an empty .npz file if the text file for a
+timestep is missing.  This bug caused an error when trying to create a sparse
+matrix from an empty .npz file.
+
+
+v0.13 May 8, 2017
+====================================================
+Fixed a bug in hq.py.  During the loop where it was reading in the h strip
+files and computing hq, it was reading the original h strip files, but should
+have been reading the hsigma files, which have sigma pre-calculated in them.
+
+Fixed a bug in hsigma.py. The saved hsigma.npz files had the wrong shape,
+which was creating errors later when trying to reconstruct the sparse matrix
+from the hsigma file.
+
+Modified hq.py and inversion.py slightly to allow importing routines
+makeHQBlocks and qht_s into other scripts if desired (mainly for testing).
+
+Added a line to write_sparse() in utils.py to convert insure saved data is a
+numpy array, not a matrix.  Related to hsigma.npz problem mentioned above.
+
+
+v0.12 Feb 28, 2017
+====================================================
+hsplit.py, hsigma.py, hq.py, utils.py, make_z.py
+Modifications were made to these files to be able to store the H strip files
+as numpy savez files in .npz format in addition to the current binary format.
+The savez format is now the default, but the binary format can still be used
+with a -b option to the scripts.
+
+Minor changes to apost.py
+
+v0.11 Nov 16, 2016
+====================================================
+apost.py:
+Modified apost.py to fix a bug, and to change logic of how aggregation over
+entire time period is done.  Before, the complete time period was assumed to
+be covered by the individual periods defined by the vshat_dates key in the
+configuration file. However, this may not always be true.  Also, some of the
+variables used for the entire time period also included any extended dates on
+the ends, for example 10 days prior to and after the 'actual' starting date.
+This resulted in some small error in the total aggregation.
+
+Now a separate total aggregation is done using the 'start_date' and 'end_date' 
+keys in the configuration file.
+
+Changed description in qsum netcdf files.
+
+utils.py:
+Added a check to make sure landmask file exists.
+
+make_z.py:
+Added a line to save the sprior data as a numpy file if the given sprior file
+was a netcdf file.
+
+inversion.py:
+Added a '--resume' option that will skip the calculation of the inverse of
+hqht, and the calculation of hqhti*zhsp and the beginning of the inversion.  
+If --resume is set, then it will read in the saved numpy files hqhti.npy and 
+hqht_zhsp.npy instead.  This gives faster startup in case a previous run of 
+the inversion was terminated, and it needs to be re-run.
+
+v0.1 Jan 20, 2016
+====================================================
+First release.

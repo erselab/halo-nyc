@@ -1,0 +1,13 @@
+stilt/harvard_jacobians
+flight_data/
+
+# Generated inversion data/outputs
+*.nc
+*.nc4
+*.npy
+
+# Python / OS junk
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
