@@ -44,6 +44,7 @@ __all__ = [
     "polynomial_design",
     "fit_lower_envelope_surface",
     "flight_background",
+    "domain_insensitive_mask",
     "receptor_background",
 ]
 
@@ -73,13 +74,19 @@ def fit_lower_envelope_surface(
     degree: int = 1,
     quantile: float = 0.25,
     n_iter: int = 5,
+    fit_mask: np.ndarray | None = None,
 ):
     """Fit a polynomial surface to the lower envelope of ``value``.
 
     Iteratively refits the surface to the subset of points whose residuals fall
     in the lowest ``quantile`` fraction, so the fit converges onto the clean-air
-    floor rather than the mean. Returns ``(coeffs, design_all)`` where
-    ``design_all @ coeffs`` evaluates the background at every input point.
+    floor rather than the mean. The surface is **evaluated** at every input point,
+    but only points allowed by ``fit_mask`` are ever **used in the fit** — use
+    this to exclude receptors that are sensitive to the inversion domain (whose
+    columns carry the enhancement we are retrieving) from defining the baseline.
+
+    Returns ``(coeffs, design_all)`` where ``design_all @ coeffs`` evaluates the
+    background at every input point.
 
     Parameters
     ----------
@@ -94,6 +101,9 @@ def fit_lower_envelope_surface(
         Fraction of lowest-residual points retained each iteration (0 < q <= 1).
     n_iter:
         Number of refinement iterations.
+    fit_mask:
+        Optional boolean array; only ``True`` points are used in the fit. Falls
+        back to all points if too few are selected for the polynomial.
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -102,13 +112,21 @@ def fit_lower_envelope_surface(
     yc = y - y.mean()
     design = polynomial_design(xc, yc, degree)
     ncols = design.shape[1]
+    n = value.shape[0]
 
-    keep = np.ones(value.shape[0], dtype=bool)
+    if fit_mask is None:
+        base_mask = np.ones(n, dtype=bool)
+    else:
+        base_mask = np.asarray(fit_mask, dtype=bool)
+        if base_mask.sum() < ncols + 1:   # too few to constrain the surface
+            base_mask = np.ones(n, dtype=bool)
+
+    keep = base_mask.copy()
     coeffs, *_ = np.linalg.lstsq(design[keep], value[keep], rcond=None)
     for _ in range(max(0, n_iter)):
         resid = value - design @ coeffs
-        thr = np.quantile(resid, quantile)
-        new_keep = resid <= thr
+        thr = np.quantile(resid[base_mask], quantile)   # envelope within allowed points
+        new_keep = base_mask & (resid <= thr)
         if new_keep.sum() < ncols + 1:
             break
         keep = new_keep
@@ -124,19 +142,35 @@ def flight_background(
     degree: int = 1,
     quantile: float = 0.25,
     n_iter: int = 5,
+    fit_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Per-receptor background for one flight via a lower-envelope surface fit.
 
     Returns the fitted background evaluated at every receptor (length =
-    ``len(value)``), in the same units as ``value``.
+    ``len(value)``), in the same units as ``value``. ``fit_mask`` (if given)
+    restricts which receptors define the surface (see
+    :func:`fit_lower_envelope_surface`).
     """
     coeffs, design = fit_lower_envelope_surface(
-        lat, lon, value, degree=degree, quantile=quantile, n_iter=n_iter
+        lat, lon, value, degree=degree, quantile=quantile, n_iter=n_iter, fit_mask=fit_mask
     )
     return design @ coeffs
 
 
-def receptor_background(jacobian_file, config) -> np.ndarray:
+def domain_insensitive_mask(domain_sensitivity, quantile: float) -> np.ndarray:
+    """Boolean mask of receptors in the lowest ``quantile`` of domain sensitivity.
+
+    ``domain_sensitivity[i]`` is a per-receptor measure of how strongly the
+    inversion domain influences receptor ``i`` (e.g. the row sum of the masked
+    Jacobian). Receptors at or below the ``quantile`` threshold are treated as
+    sampling the background (insensitive to in-domain fluxes).
+    """
+    ds = np.asarray(domain_sensitivity, dtype=float)
+    thr = np.quantile(ds, quantile)
+    return ds <= thr
+
+
+def receptor_background(jacobian_file, config, domain_sensitivity=None) -> np.ndarray:
     """Return the per-receptor background array (length ``n_receptors``).
 
     Reads the method and parameters from the ``[background]`` config section:
@@ -144,8 +178,19 @@ def receptor_background(jacobian_file, config) -> np.ndarray:
     * ``method`` = ``planar`` (default) or ``constant``
     * ``degree`` (default 1), ``envelope_quantile`` (default 0.25),
       ``n_iter`` (default 5) for the planar fit
+    * ``domain_sensitivity_quantile`` (default 1.0) — restrict the planar fit to
+      the receptors whose domain sensitivity is in this lowest fraction, so the
+      baseline is defined only by air the inversion domain does not influence.
+      1.0 uses all receptors (no restriction).
     * ``constant_value`` for the constant fallback (defaults to
       ``[observations] baseline``)
+
+    Parameters
+    ----------
+    domain_sensitivity:
+        Optional per-receptor measure of in-domain influence (e.g. the row sum of
+        the masked Jacobian). Required to apply the domain-sensitivity
+        restriction; ignored otherwise.
 
     Falls back to a constant if receptor coordinates are unavailable.
     """
@@ -165,9 +210,18 @@ def receptor_background(jacobian_file, config) -> np.ndarray:
         value = config.get_float("observations", "baseline", default=0.0)
         return constant_background(n, value)
 
+    # Restrict the fit to receptors insensitive to the inversion domain so that
+    # in-domain enhancement does not contaminate the background it is subtracted
+    # from (avoids circularity / signal suppression).
+    fit_mask = None
+    q = config.get_float("background", "domain_sensitivity_quantile", default=1.0)
+    if domain_sensitivity is not None and q is not None and q < 1.0:
+        fit_mask = domain_insensitive_mask(domain_sensitivity, q)
+
     return flight_background(
         lat, lon, obs,
         degree=config.get_int("background", "degree", default=1),
         quantile=config.get_float("background", "envelope_quantile", default=0.25),
         n_iter=config.get_int("background", "n_iter", default=5),
+        fit_mask=fit_mask,
     )

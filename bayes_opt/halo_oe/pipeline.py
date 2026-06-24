@@ -106,7 +106,11 @@ def load_context(cfg: Config, inventories) -> InversionContext:
     priors = category_priors_on_grid(
         cfg.get("emissions", "path"), grid, sources=tuple(inventories))
 
-    background = receptor_background(jf, cfg)
+    # Per-receptor sensitivity to the inversion domain = row sum of the masked
+    # Jacobian (column response to a unit uniform flux over the active cells).
+    # Used to keep in-domain receptors out of the background fit.
+    domain_sensitivity = base.matvec(np.ones(core.n_active))
+    background = receptor_background(jf, cfg, domain_sensitivity=domain_sensitivity)
     obs = build_observations(
         jf.receptor_obs,
         error_stddev=cfg.get_float("observations", "error_stddev", default=0.02),

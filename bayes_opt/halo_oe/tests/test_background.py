@@ -20,7 +20,7 @@ import halo_oe  # noqa: F401,E402
 
 from halo_oe.background import (  # noqa: E402
     constant_background, polynomial_design, fit_lower_envelope_surface,
-    flight_background, receptor_background,
+    flight_background, receptor_background, domain_insensitive_mask,
 )
 
 
@@ -94,6 +94,53 @@ class _Cfg:
         v = self._d.get((s, k), default); return None if v is None else float(v)
     def get_int(self, s, k, default=None):
         v = self._d.get((s, k), default); return None if v is None else int(v)
+
+
+def test_fit_mask_excludes_points():
+    """The surface fit ignores masked-out points but is evaluated everywhere."""
+    rng = np.random.default_rng(65)
+    n = 300
+    lat = rng.uniform(40.3, 41.4, n)
+    lon = rng.uniform(-74.9, -72.3, n)
+    true = 2.0 + 0.05 * (lat - lat.mean()) - 0.03 * (lon - lon.mean())
+    obs = true + 0.003 * rng.standard_normal(n)
+    # the MAJORITY of receptors are "in-domain" and strongly elevated, so the
+    # lower-envelope alone cannot exclude them (they dominate the low quantile too)
+    in_domain = rng.random(n) < 0.7
+    obs[in_domain] += 0.3
+    fit_mask = ~in_domain   # fit only the out-of-domain receptors
+
+    bg = flight_background(lat, lon, obs, degree=1, quantile=0.5, n_iter=4, fit_mask=fit_mask)
+    # background should track the true plane, NOT be pulled up by the +0.3 receptors
+    assert np.sqrt(np.mean((bg - true) ** 2)) < 0.02
+    # contrast: fitting everything (no mask) is biased high
+    bg_all = flight_background(lat, lon, obs, degree=1, quantile=0.5, n_iter=4)
+    assert bg_all.mean() > bg.mean() + 0.02
+
+
+def test_domain_insensitive_mask():
+    ds = np.array([0.0, 1.0, 2.0, 3.0, 10.0])
+    m = domain_insensitive_mask(ds, 0.5)  # keep lowest 50%
+    assert m.tolist() == [True, True, True, False, False]
+
+
+def test_receptor_background_uses_domain_sensitivity():
+    rng = np.random.default_rng(66)
+    n = 200
+    lat = rng.uniform(40.3, 41.4, n)
+    lon = rng.uniform(-74.9, -72.3, n)
+    true = 2.0 + 0.04 * (lat - lat.mean())
+    obs = true + 0.003 * rng.standard_normal(n)
+    sens = rng.uniform(0, 1, n)
+    hot = sens > 0.6
+    obs[hot] += 0.4                      # domain-sensitive receptors carry enhancement
+    jf = _FakeJac(lat, lon, obs)
+    cfg = _Cfg({("background", "method"): "planar", ("background", "degree"): 1,
+                ("background", "envelope_quantile"): 0.5, ("background", "n_iter"): 4,
+                ("background", "domain_sensitivity_quantile"): 0.5})
+    bg = receptor_background(jf, cfg, domain_sensitivity=sens)
+    # background should sit near the clean plane, not inflated by the hot receptors
+    assert np.sqrt(np.mean((bg - true) ** 2)) < 0.03
 
 
 def test_receptor_background_dispatch():
