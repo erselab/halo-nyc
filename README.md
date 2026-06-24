@@ -94,10 +94,33 @@ source / domain:
 - `*.h5` — flight data products (raw `staqs-HALO-XCH4_*`, coarsened `*_500m/1000m`, `*subCH4*`).
 - Notebooks: `compare_data_versions.ipynb`, `coarsen_halo_tracks.ipynb`, `plot_halo_xch4_obs.ipynb`.
 
-## `bayes_opt/` — Bayesian (geostatistical) flux inversion
+## `bayes_opt/` — flux inversion
 
-A self-contained LPDM-style Bayesian inversion package solving
-`shat = sprior + HQTᵀ·(HQHT+R)⁻¹·(z − Hsp)`:
+Contains **two independent inversion packages**:
+
+### `bayes_opt/halo_oe/` — column-Jacobian optimal estimation (current)
+
+The active HALO flux inversion: a Bayesian optimal-estimation inversion that uses
+the precomputed Harvard **column Jacobians** (`stilt/harvard_jacobians/*.nc`) as
+the forward model between flux and column-enhancement space. It solves for gridded
+NYC CH₄ fluxes with a per-flight planar background, supports comparing the three
+emission inventories as alternative priors, and decomposes the posterior into
+emission super-category totals (with point-source vs diffuse error structure).
+
+It is built on the separate, problem-agnostic **`goe-inversion`** framework
+(`goe/` core + `adapters/`) and imports it; no HALO code lives in that framework.
+
+➡️ **See [`bayes_opt/halo_oe/README.md`](bayes_opt/halo_oe/README.md) for full
+documentation** (model, pipeline, configuration, decomposition methods, usage,
+tests). The walkthrough notebook `bayes_opt/halo_oe/halo_inversion_walkthrough.ipynb`
+runs a single-flight inversion step by step.
+
+### `bayes_opt/ctl/` — CarbonTracker-Lagrange (legacy)
+
+A self-contained LPDM-style geostatistical Bayesian inversion (the original
+CarbonTracker-Lagrange code) solving
+`shat = sprior + HQTᵀ·(HQHT+R)⁻¹·(z − Hsp)`. Retained for reference and earlier
+results; superseded by `halo_oe/` for the HALO column work.
 
 | File | Role |
 |---|---|
@@ -113,6 +136,7 @@ A self-contained LPDM-style Bayesian inversion package solving
 | `config.ini` / `config.ini.sample` | Inversion configuration (domain, resolution, correlation lengths, file paths). |
 | `*_obs.txt`, `*_dxco2.txt`, `r_*.txt`, `bkg.txt`, `receptors.txt`, `obs.txt` | Inputs: per-inventory obs vectors, prior dXCO₂, observation-error variants, backgrounds, receptor lists. |
 | `prep_nyc_inputs.ipynb`, `plot_ctl_results.ipynb`, `sanity_check_ct.ipynb` | Input prep, result plotting, sanity checks. |
+| `shat*.nc/.npy`, `sigma_*.nc`, `landmask_*.npy`, … | Run outputs/intermediates (git-ignored: `*.nc`/`*.npy`). |
 
 ## `tropomi/` — satellite cross-validation
 

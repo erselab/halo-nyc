@@ -1,0 +1,235 @@
+# halo_oe — HALO NYC methane flux inversion
+
+HALO-specific Bayesian flux inversion of column-averaged XCH₄ observations over
+New York City. This package contains **only the HALO-specific glue**; the generic
+linear-Gaussian optimal-estimation machinery lives in the separate
+[`goe-inversion`](../../../goe-inversion) project and is used here purely by
+import. Nothing HALO-specific belongs in that project.
+
+```
+halo-nyc/bayes_opt/halo_oe/      <- this package (imports goe + adapters)
+/Volumes/Expansion/goe-inversion <- generic framework: goe/ (core) + adapters/
+```
+
+The dependency arrow is one-way: `halo_oe` → `goe-inversion`. Swapping in a
+different problem means writing a different glue package, not editing the
+framework.
+
+---
+
+## The model
+
+Each HALO receptor is a column-averaged XCH₄ observation taken from an aircraft
+at ~10–11 km. We write it as a background plus an enhancement driven by surface
+fluxes through a precomputed column Jacobian `H` (the `stilt/harvard_jacobians/*.nc`
+files, units ppm per µmol m⁻² s⁻¹):
+
+```
+x_obs = x_bg + H f + ε,      ε ~ N(0, R)
+```
+
+We solve for the flux `f` by Bayesian optimal estimation, parameterized as
+dimensionless multiplicative scalars on a prior emission field, with a Gaussian
+prior `N(xa, Sa)`:
+
+```
+x̂ = xa + Sa Hᵀ (H Sa Hᵀ + R)⁻¹ (z − H xa),     z = x_obs − x_bg
+```
+
+The solve is done in observation space (`n_obs ≈ 1271` receptors per flight ≪
+`n_state`), so a multi-gigabyte dense Jacobian over millions of grid cells stays
+tractable. The framework picks observation- vs state-space automatically.
+
+---
+
+## Pipeline (what runs, in order)
+
+```
+Jacobian file (.nc)  ─► JacobianFile            metadata only; big array read lazily
+       │
+       ├─ receptors (lat/lon/xch4) ─► background.py  per-flight planar background
+       │                                  └─► z = x_obs − x_bg,  R   (observations)
+       │
+domain bbox ─► GriddedState (mask)  ─► jf.operator(active=mask)   ← the slow 13 GB read
+       │                                  └─► H over active cells (base operator)
+       │
+nyc_ch4_emissions.h5 ─► emissions.py  ─► prior field(s) regridded onto Jacobian grid
+       │                                  (one inventory; optionally per super-category)
+       ▼
+   StateSpace + BlockDiagonalCovariance ─► GaussianLinearProblem ─► solve
+       ▼
+   posterior maps  +  flux.py / decomposition.py  ─► integrated flux totals (+ uncertainty)
+       ▼
+   write_posterior(...)  ─► netCDF
+```
+
+The expensive Jacobian read is done **once** per run (`pipeline.load_context`) and
+reused — including across the three inventories in `--compare` mode.
+
+---
+
+## Key concepts
+
+### Inventories are alternatives, not additive
+
+`nyc_ch4_emissions.h5` holds **three independent inventories** — `edgar`, `epa`,
+`pitt` (Pittsburgh) — each a *complete* estimate of the same NYC emissions with
+its own sub-category breakdown. **They are never summed.** A single inversion uses
+one as the prior (`[emissions] inventory`); `--compare` inverts each separately
+and tabulates the posteriors to show how prior-dependent the answer is.
+
+### Background (per-flight planar, lower-envelope)
+
+The Jacobian explains only the *enhancement*, so the inflow/free-tropospheric
+background must be removed first. `background.py` fits a **per-flight, low-degree
+(default plane) surface in (lat, lon)** to the **lower envelope** of the observed
+columns (a low quantile of residuals, iteratively), so it tracks clean air rather
+than riding up into the urban plume. Fitting per flight captures day/time
+variation; the optimized background-offset block (`bc`) mops up a residual
+constant per flight.
+
+### Category decomposition
+
+Within **one** inventory, the sub-categories (landfills, wastewater, natural gas,
+…) *are* additive sectors that sum to the inventory total, so the posterior can be
+decomposed by category. Sub-categories are grouped into configurable
+**super-categories** (`groups.py` + `[category_groups]`) by keyword matching.
+
+Three attribution methods (`[decomposition] method`):
+
+| method | what it solves | split is determined by | notes |
+|---|---|---|---|
+| `partition` | per-cell scalar on the inventory total | **prior** category variance (post-hoc) | cheap; data constrain the total only |
+| `category_fields` | a per-cell scalar field **per category** | **data** + per-category covariance | **recommended**; spatially resolved, well-posed |
+| `category_scalars` | one domain scalar per category + per-cell total correction | data (spatial fingerprints) | weakly identified from a single flight; prior-sensitive (can run away) |
+
+**Per-category error structure** (`category_fields`, via `[category_spatial]`):
+point sources with known locations (landfills, WWTPs) use a **diagonal**
+covariance (only magnitude at known cells is uncertain); diffuse / spatially
+uncertain sources (natural gas distribution, area combustion) use a **spatial**
+covariance with a modest decorrelation length. This both stabilizes the total and
+yields a physically defensible sectoral attribution.
+
+> Caveat baked into the design: column XCH₄ poorly separates *co-located*
+> categories (same footprint). The prior σ's therefore do real work in the split,
+> and from a single flight the information content (DOFS) is ~1–2. Multi-flight
+> data are needed before fine attribution is trustworthy.
+
+---
+
+## Files
+
+| file | role |
+|---|---|
+| `__init__.py` | bootstraps `goe`/`adapters` onto `sys.path` (or use `GOE_INVERSION_PATH`) |
+| `pipeline.py` | reusable `load_context` (one Jacobian read) + `invert_with_inventory` (all modes) |
+| `run_halo.py` | CLI: single run, `--compare`, `--inventory`; reads `config.ini` |
+| `background.py` | per-flight lower-envelope planar background → per-receptor baseline |
+| `emissions.py` | regrid inventory totals / per-sub-category fields onto the Jacobian grid |
+| `groups.py` | configurable keyword grouping of sub-categories into super-categories |
+| `decomposition.py` | the three attribution methods + per-category covariance builder |
+| `flux.py` | integrate scalars × prior × cell-area → totals with uncertainty (`linear_estimate`) |
+| `config.ini` | all settings (see below) |
+| `halo_inversion_walkthrough.ipynb` | step-by-step notebook (reads the same `config.ini`) |
+| `tests/` | synthetic unit tests (`test_flux`, `test_background`, `test_decomposition`) |
+
+---
+
+## Configuration (`config.ini`)
+
+All settings are read from `config.ini`; the notebook reads the same file, so it
+stays in sync with the CLI. Sections:
+
+- `[jacobian]` — `path`, `in_memory`, `row_chunk`
+- `[domain]` — `bbox = [lat_min, lat_max, lon_min, lon_max]` (the NYC core mask)
+- `[emissions]` — `path`, `inventory` (primary prior), `compare` (list for `--compare`)
+- `[background]` — `method` (planar|constant), `degree`, `envelope_quantile`, `n_iter`
+- `[prior]` — `scalar_stddev`, `correlation_length_km` (per-cell total field)
+- `[observations]` — `error_stddev`, `error_inflation`, fallback `baseline`
+- `[offset]` — `n_groups`, `stddev` (per-flight background offset block)
+- `[decomposition]` — `enabled`, `method` (partition|category_fields|category_scalars)
+- `[category_groups]` — `group = keyword, keyword, …` (sub-category → super-category)
+- `[category_uncertainty]` — `default` + per-group relative σ
+- `[category_spatial]` — per-group decorrelation length km; `0` = diagonal (point source)
+- `[flux]` — `unit_scale`, `unit_label`
+- `[output]` — `path`
+
+Paths in `config.ini` are relative to the file's own directory. Inline `#`/`;`
+comments after a value are supported (handled by `goe.config.Config`).
+
+---
+
+## Usage
+
+Run from the `bayes_opt/` directory (so `python -m halo_oe.*` resolves), or add it
+to `PYTHONPATH`.
+
+```bash
+# single inversion with the primary inventory (config [emissions] inventory)
+python -m halo_oe.run_halo halo_oe/config.ini
+
+# override the inventory
+python -m halo_oe.run_halo halo_oe/config.ini --inventory epa
+
+# compare all three inventories as alternative priors (one Jacobian read)
+python -m halo_oe.run_halo halo_oe/config.ini --compare
+```
+
+Decomposition is enabled via config (`[decomposition] enabled = true` and
+`method = …`), not a flag. Output is a netCDF with posterior scalar fields, their
+uncertainties, prior fields, and the integrated flux totals as attributes.
+
+### As a library
+
+```python
+import halo_oe                       # wires goe + adapters onto the path
+from goe.config import Config
+from halo_oe.pipeline import load_context, invert_with_inventory
+
+cfg = Config("halo_oe/config.ini")
+ctx = load_context(cfg, inventories=["pitt"])          # reads the Jacobian once
+res = invert_with_inventory(ctx, "pitt",
+                            decompose=True, method="category_fields")
+print(res.report.as_table())                            # per-category totals + uncertainty
+```
+
+---
+
+## Tests
+
+Synthetic, self-contained (no large files needed). Run any file directly:
+
+```bash
+python halo_oe/tests/test_flux.py
+python halo_oe/tests/test_background.py
+python halo_oe/tests/test_decomposition.py
+```
+
+Key invariants checked: the background fit recovers a plane under a synthetic
+plume and is flight-dependent; the flux estimator matches a dense reference; both
+attribution modes (and `category_fields`) sum exactly to the inventory total with
+prior totals equal to the direct integral; per-category covariances are diagonal
+vs spatial per config.
+
+---
+
+## Status / units caveat
+
+The pipeline runs end-to-end on real data (single flight). Integrated fluxes are
+reported in **native units** (`prior-units × m²`) until the inventory's emission
+units are confirmed and `[flux] unit_scale` is set (e.g. to convert µmol s⁻¹ →
+kt CH₄ yr⁻¹).
+
+### Remaining work toward a defensible number
+
+1. **Multi-flight assimilation** — stack all six flights (each with its own
+   background and offset) into one joint constraint. DOFS ~1–2 per flight is the
+   core limitation.
+2. **Domain + buffer** — enlarge the core mask and add a coarse buffer ring so
+   just-outside emissions don't alias inward.
+3. **Error budget** — add a model–data mismatch term to `R` (reduced χ² ~2.5
+   indicates the current obs error is too tight); justify the prior σ's and
+   correlation lengths.
+4. **Units** — confirm inventory units, set `unit_scale`.
+5. **Sensitivity** — vary background envelope quantile, prior widths, correlation
+   lengths, and the category grouping.
