@@ -30,16 +30,63 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402  (side effect: makes goe/adapters importable)
 
 from goe.config import Config  # noqa: E402
+from goe import desroziers_diagnostics, tune_variance_scales  # noqa: E402
 from adapters.io import write_posterior  # noqa: E402
 
-from halo_oe.pipeline import invert_with_inventory, load_context  # noqa: E402
+from halo_oe.pipeline import invert, load_context  # noqa: E402
 
 
 def _split(s):
     return [x.strip() for x in s.split(",") if x.strip()]
 
 
-def run(config_path: str, inventory: str | None = None) -> str:
+def _write_receptor_diagnostics(out_path, ctx, res):
+    """Append per-receptor variables (coords, obs, outlier flag) to the output."""
+    import netCDF4
+    import numpy as np
+
+    n = ctx.jf.n_receptors
+    with netCDF4.Dataset(out_path, "a") as ds:
+        if "receptor" not in ds.dimensions:
+            ds.createDimension("receptor", n)
+        for name, data in (("receptor_lat", ctx.jf.receptor_lat),
+                           ("receptor_lon", ctx.jf.receptor_lon),
+                           ("receptor_obs", ctx.jf.receptor_obs),
+                           ("receptor_background", ctx.background)):
+            if data is not None and name not in ds.variables:
+                ds.createVariable(name, "f8", ("receptor",))[:] = np.asarray(data)
+        if res.outlier_mask is not None and "outlier_flag" not in ds.variables:
+            v = ds.createVariable("outlier_flag", "i1", ("receptor",))
+            v.long_name = "1 = observation flagged as outlier and excluded from the fit"
+            v[:] = res.outlier_mask.astype("i1")
+
+
+def _report_tuning(cfg, res):
+    """Report model-data-mismatch diagnostics and max-likelihood error scales.
+
+    Non-destructive: prints the Desroziers consistency check and the
+    marginal-likelihood-optimal variance multipliers, plus the config changes
+    that would apply them. Tune choices come from the ``[tuning]`` section.
+    """
+    d = desroziers_diagnostics(res.problem, res.posterior)
+    print("\n--- error tuning ---")
+    print(f"  reduced chi-square (current): {d['reduced_chi_square']:.3f}")
+    print(f"  Desroziers R consistency r_scale: {d['r_scale']:.3f}  "
+          f"(>1 => assumed R too small)")
+
+    tune_R = cfg.get_bool("tuning", "tune_R", default=True)
+    tune_Sa = cfg.get_bool("tuning", "tune_Sa", default=False)
+    vr = tune_variance_scales(res.problem, tune_Sa=tune_Sa, tune_R=tune_R)
+    print(f"  max-likelihood scales: alpha_R={vr.alpha_R:.3f}  alpha_Sa={vr.alpha_Sa:.3f}"
+          f"  (log-likelihood {vr.log_likelihood:.2f})")
+    if tune_R:
+        print(f"  -> set [observations] error_inflation = {vr.alpha_R:.3f}  "
+              f"(or scale mdm/measurement stddev by {vr.alpha_R**0.5:.3f})")
+    if tune_Sa:
+        print(f"  -> scale [prior] scalar_stddev by {vr.alpha_Sa**0.5:.3f}")
+
+
+def run(config_path: str, inventory: str | None = None, tune: bool = False) -> str:
     """Run a single inversion with the primary (or overridden) inventory."""
     cfg = Config(config_path)
     inv = inventory or cfg.get("emissions", "inventory", default="pitt")
@@ -51,7 +98,7 @@ def run(config_path: str, inventory: str | None = None) -> str:
     print(f"Active core cells: {ctx.core.n_active} of {ctx.grid.n_cells}")
     print(f"Inventory (prior): {inv}")
 
-    res = invert_with_inventory(ctx, inv, decompose=decompose, method=method)
+    res = invert(ctx, inv, decompose=decompose, method=method)
     print(f"Problem: {res.problem.n_obs} obs x {res.problem.n_state} state; "
           f"solved via {res.posterior.strategy}-space form.  mode={res.mode}")
     if res.assignment is not None:
@@ -65,6 +112,9 @@ def run(config_path: str, inventory: str | None = None) -> str:
         print(f"  {k}: {v:.4g}")
     print("\n" + res.report.as_table() + "\n")
 
+    if tune:
+        _report_tuning(cfg, res)
+
     diag = dict(res.diagnostics)
     for i, name in enumerate(res.report.names):
         diag[f"flux_prior_{name}"] = res.report.prior[i]
@@ -75,7 +125,11 @@ def run(config_path: str, inventory: str | None = None) -> str:
                                 for b in res.state.blocks})
     out_path = cfg.get("output", "path", default=f"halo_posterior_{inv}.nc")
     write_posterior(out_path, res.state, res.posterior, prior_mean=xa, diagnostics=diag)
+    _write_receptor_diagnostics(out_path, ctx, res)   # coords, obs, outlier_flag
     print(f"Wrote {out_path}")
+    if res.diagnostics.get("n_outliers", 0):
+        print(f"  flagged {int(res.diagnostics['n_outliers'])} outlier receptors "
+              f"(saved as 'outlier_flag')")
     ctx.jf.close()
     return out_path
 
@@ -94,7 +148,7 @@ def run_compare(config_path: str) -> None:
 
     rows = []
     for inv in inventories:
-        res = invert_with_inventory(ctx, inv)
+        res = invert(ctx, inv)
         r = res.report
         rows.append((inv, r.prior[0], r.posterior[0], r.posterior_stddev[0],
                      r.scale_factor[0], res.diagnostics["reduced_chi_square"]))
@@ -121,11 +175,14 @@ def main():
                    help="Override the primary inventory (e.g. edgar, epa, pitt).")
     p.add_argument("--compare", action="store_true",
                    help="Invert each inventory in [emissions] compare and tabulate.")
+    p.add_argument("--tune", action="store_true",
+                   help="Report model-data-mismatch diagnostics and max-likelihood "
+                        "error-variance scales (non-destructive).")
     args = p.parse_args()
     if args.compare:
         run_compare(args.config)
     else:
-        run(args.config, inventory=args.inventory)
+        run(args.config, inventory=args.inventory, tune=args.tune)
 
 
 if __name__ == "__main__":

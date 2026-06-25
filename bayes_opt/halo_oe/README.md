@@ -88,6 +88,32 @@ than riding up into the urban plume. Fitting per flight captures day/time
 variation; the optimized background-offset block (`bc`) mops up a residual
 constant per flight.
 
+**Don't let in-domain data set the background.** The baseline must come from air
+the inversion domain does not influence, or the in-domain enhancement leaks into
+the background it is subtracted from (circular; suppresses the signal). For column
+data, "in-domain" means a receptor whose Jacobian footprint touches the masked
+cells, measured as each receptor's **domain sensitivity = row sum of the masked
+`H`**. The planar fit is restricted to the least-sensitive fraction of receptors
+(`[background] domain_sensitivity_quantile`); the surface is still evaluated at all
+of them.
+
+### Observation error (model-data mismatch)
+
+The observation-error covariance `R` (`obs_error.py`, `[observations]
+error_model = components`) is built from physical components rather than one
+number: an independent per-receptor **measurement** variance plus a
+**representation+transport** term. Because adjacent 1 km receptors have heavily
+overlapping column footprints, that mismatch term is **correlated along-track** —
+`R = diag(measurement) + correlated MDM`, a single `SparseCovariance`. A diagonal
+`R` treats correlated residuals as independent and makes reduced χ² look far too
+high; the correlation is often the largest single correctness gain.
+
+The magnitudes are hyperparameters. `run_halo.py --tune` reports the Desroziers
+consistency `r_scale` and the marginal-likelihood-optimal variance multipliers
+(`goe.tuning`), with the config edits to apply them. With one flight the `R`/`Sa`
+split is weakly identified (DOFS ~1–2) — tune `R` only until multi-flight data are
+available.
+
 ### Category decomposition
 
 Within **one** inventory, the sub-categories (landfills, wastewater, natural gas,
@@ -122,16 +148,17 @@ yields a physically defensible sectoral attribution.
 | file | role |
 |---|---|
 | `__init__.py` | bootstraps `goe`/`adapters` onto `sys.path` (or use `GOE_INVERSION_PATH`) |
-| `pipeline.py` | reusable `load_context` (one Jacobian read) + `invert_with_inventory` (all modes) |
+| `pipeline.py` | reusable `load_context` (one Jacobian read) + `invert` (all modes) |
 | `run_halo.py` | CLI: single run, `--compare`, `--inventory`; reads `config.ini` |
-| `background.py` | per-flight lower-envelope planar background → per-receptor baseline |
+| `background.py` | per-flight lower-envelope planar background (domain-insensitive receptors) |
+| `obs_error.py` | component-wise `R`: measurement ⊕ along-track-correlated model-data mismatch |
 | `emissions.py` | regrid inventory totals / per-sub-category fields onto the Jacobian grid |
 | `groups.py` | configurable keyword grouping of sub-categories into super-categories |
 | `decomposition.py` | the three attribution methods + per-category covariance builder |
 | `flux.py` | integrate scalars × prior × cell-area → totals with uncertainty (`linear_estimate`) |
 | `config.ini` | all settings (see below) |
 | `halo_inversion_walkthrough.ipynb` | step-by-step notebook (reads the same `config.ini`) |
-| `tests/` | synthetic unit tests (`test_flux`, `test_background`, `test_decomposition`) |
+| `tests/` | synthetic unit tests (`test_flux`, `test_background`, `test_decomposition`, `test_obs_error`) |
 
 ---
 
@@ -143,14 +170,18 @@ stays in sync with the CLI. Sections:
 - `[jacobian]` — `path`, `in_memory`, `row_chunk`
 - `[domain]` — `bbox = [lat_min, lat_max, lon_min, lon_max]` (the NYC core mask)
 - `[emissions]` — `path`, `inventory` (primary prior), `compare` (list for `--compare`)
-- `[background]` — `method` (planar|constant), `degree`, `envelope_quantile`, `n_iter`
+- `[background]` — `method` (planar|constant), `degree`, `envelope_quantile`, `n_iter`,
+  `domain_sensitivity_quantile` (restrict the fit to domain-insensitive receptors; 1.0 = off)
 - `[prior]` — `scalar_stddev`, `correlation_length_km` (per-cell total field)
-- `[observations]` — `error_stddev`, `error_inflation`, fallback `baseline`
+- `[observations]` — `error_model` (simple|components), `error_stddev`, `error_inflation`,
+  fallback `baseline`; for components: `measurement_stddev`, `mdm_stddev`,
+  `mdm_correlation_length_km`
 - `[offset]` — `n_groups`, `stddev` (per-flight background offset block)
 - `[decomposition]` — `enabled`, `method` (partition|category_fields|category_scalars)
 - `[category_groups]` — `group = keyword, keyword, …` (sub-category → super-category)
 - `[category_uncertainty]` — `default` + per-group relative σ
 - `[category_spatial]` — per-group decorrelation length km; `0` = diagonal (point source)
+- `[tuning]` — `tune_R`, `tune_Sa` (used by `run_halo.py --tune`)
 - `[flux]` — `unit_scale`, `unit_label`
 - `[output]` — `path`
 
@@ -173,6 +204,9 @@ python -m halo_oe.run_halo halo_oe/config.ini --inventory epa
 
 # compare all three inventories as alternative priors (one Jacobian read)
 python -m halo_oe.run_halo halo_oe/config.ini --compare
+
+# report model-data-mismatch diagnostics + max-likelihood error scales (non-destructive)
+python -m halo_oe.run_halo halo_oe/config.ini --tune
 ```
 
 Decomposition is enabled via config (`[decomposition] enabled = true` and
@@ -184,11 +218,11 @@ uncertainties, prior fields, and the integrated flux totals as attributes.
 ```python
 import halo_oe                       # wires goe + adapters onto the path
 from goe.config import Config
-from halo_oe.pipeline import load_context, invert_with_inventory
+from halo_oe.pipeline import load_context, invert
 
 cfg = Config("halo_oe/config.ini")
 ctx = load_context(cfg, inventories=["pitt"])          # reads the Jacobian once
-res = invert_with_inventory(ctx, "pitt",
+res = invert(ctx, "pitt",
                             decompose=True, method="category_fields")
 print(res.report.as_table())                            # per-category totals + uncertainty
 ```
@@ -203,13 +237,15 @@ Synthetic, self-contained (no large files needed). Run any file directly:
 python halo_oe/tests/test_flux.py
 python halo_oe/tests/test_background.py
 python halo_oe/tests/test_decomposition.py
+python halo_oe/tests/test_obs_error.py
 ```
 
 Key invariants checked: the background fit recovers a plane under a synthetic
-plume and is flight-dependent; the flux estimator matches a dense reference; both
-attribution modes (and `category_fields`) sum exactly to the inventory total with
-prior totals equal to the direct integral; per-category covariances are diagonal
-vs spatial per config.
+plume, is flight-dependent, and excludes domain-sensitive receptors; the flux
+estimator matches a dense reference; both attribution modes (and `category_fields`)
+sum exactly to the inventory total with prior totals equal to the direct integral;
+per-category covariances are diagonal vs spatial per config; the component-wise `R`
+combines an independent measurement diagonal with a correlated mismatch term.
 
 ---
 
@@ -227,9 +263,10 @@ kt CH₄ yr⁻¹).
    core limitation.
 2. **Domain + buffer** — enlarge the core mask and add a coarse buffer ring so
    just-outside emissions don't alias inward.
-3. **Error budget** — add a model–data mismatch term to `R` (reduced χ² ~2.5
-   indicates the current obs error is too tight); justify the prior σ's and
-   correlation lengths.
+3. **Error budget** — the component-wise, along-track-correlated `R` and the
+   tuning hooks (`--tune`, `goe.tuning`) are in place; what remains is to *fit*
+   the MDM magnitude and correlation length to data, best done with multi-flight
+   so the `R`/`Sa` split is identifiable (DOFS ~1–2 per flight is too few).
 4. **Units** — confirm inventory units, set `unit_scale`.
 5. **Sensitivity** — vary background envelope quantile, prior widths, correlation
-   lengths, and the category grouping.
+   lengths, MDM correlation length, and the category grouping.
