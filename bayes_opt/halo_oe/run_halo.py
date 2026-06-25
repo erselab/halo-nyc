@@ -41,20 +41,29 @@ def _split(s):
 
 
 def _write_receptor_diagnostics(out_path, ctx, res):
-    """Append per-receptor variables (coords, obs, outlier flag) to the output."""
+    """Append per-receptor variables (coords, obs, flight, outlier flag) to output.
+
+    Concatenated across all assimilated flights, in the same order as the stacked
+    observations, with a per-receptor flight index for grouping.
+    """
     import netCDF4
     import numpy as np
 
-    n = ctx.jf.n_receptors
+    cat = lambda attr: np.concatenate([np.asarray(getattr(jf, attr)) for jf in ctx.jfs])
+    n = sum(jf.n_receptors for jf in ctx.jfs)
     with netCDF4.Dataset(out_path, "a") as ds:
         if "receptor" not in ds.dimensions:
             ds.createDimension("receptor", n)
-        for name, data in (("receptor_lat", ctx.jf.receptor_lat),
-                           ("receptor_lon", ctx.jf.receptor_lon),
-                           ("receptor_obs", ctx.jf.receptor_obs),
-                           ("receptor_background", ctx.background)):
-            if data is not None and name not in ds.variables:
-                ds.createVariable(name, "f8", ("receptor",))[:] = np.asarray(data)
+        for name, data in (("receptor_lat", cat("receptor_lat")),
+                           ("receptor_lon", cat("receptor_lon")),
+                           ("receptor_obs", cat("receptor_obs")),
+                           ("receptor_background", np.asarray(ctx.background))):
+            if name not in ds.variables:
+                ds.createVariable(name, "f8", ("receptor",))[:] = data
+        if ctx.flight_index is not None and "receptor_flight" not in ds.variables:
+            v = ds.createVariable("receptor_flight", "i4", ("receptor",))
+            v.flight_ids = ", ".join(ctx.flight_ids)
+            v[:] = np.asarray(ctx.flight_index)
         if res.outlier_mask is not None and "outlier_flag" not in ds.variables:
             v = ds.createVariable("outlier_flag", "i1", ("receptor",))
             v.long_name = "1 = observation flagged as outlier and excluded from the fit"
@@ -86,7 +95,8 @@ def _report_tuning(cfg, res):
         print(f"  -> scale [prior] scalar_stddev by {vr.alpha_Sa**0.5:.3f}")
 
 
-def run(config_path: str, inventory: str | None = None, tune: bool = False) -> str:
+def run(config_path: str, inventory: str | None = None, tune: bool = False,
+        flights=None) -> str:
     """Run a single inversion with the primary (or overridden) inventory."""
     cfg = Config(config_path)
     inv = inventory or cfg.get("emissions", "inventory", default="pitt")
@@ -94,7 +104,9 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False) -> s
     decompose = cfg.get_bool("decomposition", "enabled", default=False)
     method = cfg.get("decomposition", "method", default="partition")
 
-    ctx = load_context(cfg, inventories=[inv])
+    ctx = load_context(cfg, inventories=[inv], flights=flights)
+    print(f"Flights ({ctx.n_flights}): {', '.join(ctx.flight_ids)}  "
+          f"-> {ctx.obs.n_obs} observations")
     print(f"Active core cells: {ctx.core.n_active} of {ctx.grid.n_cells}")
     print(f"Inventory (prior): {inv}")
 
@@ -130,16 +142,19 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False) -> s
     if res.diagnostics.get("n_outliers", 0):
         print(f"  flagged {int(res.diagnostics['n_outliers'])} outlier receptors "
               f"(saved as 'outlier_flag')")
-    ctx.jf.close()
+    for jf in ctx.jfs:
+        jf.close()
     return out_path
 
 
-def run_compare(config_path: str) -> None:
+def run_compare(config_path: str, flights=None) -> None:
     """Invert each inventory separately (one Jacobian read) and tabulate results."""
     cfg = Config(config_path)
     inventories = _split(cfg.get("emissions", "compare", default="edgar,epa,pitt"))
 
-    ctx = load_context(cfg, inventories=inventories)
+    ctx = load_context(cfg, inventories=inventories, flights=flights)
+    print(f"Flights ({ctx.n_flights}): {', '.join(ctx.flight_ids)}  "
+          f"-> {ctx.obs.n_obs} observations")
     print(f"Active core cells: {ctx.core.n_active} of {ctx.grid.n_cells}")
     print(f"Comparing inventories as alternative priors: {inventories}\n")
 
@@ -165,7 +180,8 @@ def run_compare(config_path: str) -> None:
         print(f"{inv:<10} {pr:>14.4g} {po:>14.4g} {sd:>12.4g} {sc:>8.3f} {chi:>8.3f}")
     print(f"\nunits: {label}")
     print("Note: rows are independent inversions with different priors — do NOT sum them.")
-    ctx.jf.close()
+    for jf in ctx.jfs:
+        jf.close()
 
 
 def main():
@@ -178,11 +194,15 @@ def main():
     p.add_argument("--tune", action="store_true",
                    help="Report model-data-mismatch diagnostics and max-likelihood "
                         "error-variance scales (non-destructive).")
+    p.add_argument("--flights", default=None,
+                   help="Comma-separated flight ids to assimilate jointly (overrides "
+                        "[jacobian] flights), e.g. 20230726_1,20230726_2.")
     args = p.parse_args()
+    flights = _split(args.flights) if args.flights else None
     if args.compare:
-        run_compare(args.config)
+        run_compare(args.config, flights=flights)
     else:
-        run(args.config, inventory=args.inventory, tune=args.tune)
+        run(args.config, inventory=args.inventory, tune=args.tune, flights=flights)
 
 
 if __name__ == "__main__":

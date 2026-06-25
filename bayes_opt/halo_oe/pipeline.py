@@ -14,12 +14,14 @@ emissions, so each inversion uses exactly one of them as the prior — never a s
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from goe import (
     BlockDiagonalCovariance,
+    BlockRow,
     DiagonalCovariance,
     GaussianLinearProblem,
     StateSpace,
@@ -51,22 +53,33 @@ from .emissions import category_priors_on_grid, group_priors_on_grid
 from .flux import FluxReport, estimate_fluxes
 from .groups import keyword_map_from_config
 
-__all__ = ["InversionContext", "InversionResult", "load_context",
+__all__ = ["InversionContext", "InversionResult", "load_context", "flight_paths",
            "invert"]
 
 
 @dataclass
 class InversionContext:
-    """Inventory-independent inputs, built once per Jacobian read."""
+    """Inventory-independent inputs, built once per Jacobian read.
+
+    Supports one or several flights: the flux state is shared across flights and
+    each flight contributes its own block of observation rows. For a single flight
+    these reduce to the obvious quantities.
+    """
 
     cfg: Config
-    jf: JacobianFile
     grid: Grid
     core: GriddedState
-    base: LinearOperator                 # forward operator over active cells
-    background: np.ndarray               # per-receptor background
-    obs: Observations                    # enhancement vector z + error R
+    base: LinearOperator                 # forward operator over active cells (rows stacked over flights)
+    background: np.ndarray               # per-receptor background (all flights concatenated)
+    obs: Observations                    # enhancement vector z + error R (all flights)
     priors: dict[str, np.ndarray]        # {inventory: prior field on the grid}
+    jfs: list = field(default_factory=list)            # open JacobianFile per flight
+    flight_ids: list = field(default_factory=list)     # flight identifier per flight
+    flight_index: np.ndarray | None = None             # flight number per observation
+
+    @property
+    def n_flights(self) -> int:
+        return len(self.jfs)
 
 
 @dataclass
@@ -84,61 +97,94 @@ class InversionResult:
     outlier_mask: np.ndarray | None = None   # bool per original observation (True = flagged)
 
 
-def load_context(cfg: Config, inventories) -> InversionContext:
-    """Build the inventory-independent context (reads the Jacobian once).
+def flight_paths(cfg: Config, flights=None):
+    """Resolve the list of ``(flight_id, jacobian_path)`` to assimilate.
 
-    Parameters
-    ----------
-    cfg:
-        Parsed configuration.
-    inventories:
-        Iterable of inventory names whose prior fields should be regridded and
-        cached (e.g. just the primary, or all three for comparison).
+    Selection order:
+
+    * ``flights`` argument (e.g. from ``--flights``), if given;
+    * ``[jacobian] flights`` (comma-separated flight ids) joined with
+      ``[jacobian] dir``;
+    * ``[jacobian] path`` (a single file) for backward compatibility.
+
+    A flight id is the Jacobian file stem (e.g. ``20230726_1``).
     """
-    jf = JacobianFile(cfg.get("jacobian", "path"))
-    grid = jf.grid
-
-    bbox = cfg.get_literal("domain", "bbox", default=None)
-    mask = grid.bbox_mask(*bbox) if bbox is not None else None
-    core = GriddedState(grid, mask, name="core")
-
-    base = jf.operator(
-        active=core.active,
-        in_memory=cfg.get_bool("jacobian", "in_memory", default=True),
-        row_chunk=cfg.get_int("jacobian", "row_chunk", default=16),
-    )
-
-    priors = category_priors_on_grid(
-        cfg.get("emissions", "path"), grid, sources=tuple(inventories))
-
-    # Per-receptor sensitivity to the inversion domain = row sum of the masked
-    # Jacobian (column response to a unit uniform flux over the active cells).
-    # Used to keep in-domain receptors out of the background fit.
-    domain_sensitivity = base.matvec(np.ones(core.n_active))
-    background = receptor_background(jf, cfg, domain_sensitivity=domain_sensitivity)
-    obs = build_observations(
-        jf.receptor_obs,
-        error_stddev=cfg.get_float("observations", "error_stddev", default=0.02),
-        baseline=background,
-        error_inflation=cfg.get_float("observations", "error_inflation", default=1.0),
-    )
-    # Optionally replace the simple diagonal R with a component-wise covariance
-    # (measurement + along-track-correlated model-data mismatch).
-    if cfg.get("observations", "error_model", default="simple") == "components":
-        R = build_obs_error_covariance(jf.receptor_lat, jf.receptor_lon, cfg)
-        obs = Observations(z=obs.z, R=R, raw=obs.raw, baseline=obs.baseline)
-    return InversionContext(cfg, jf, grid, core, base, background, obs, priors)
+    if flights is None:
+        spec = cfg.get("jacobian", "flights", default=None)
+        flights = [s.strip() for s in spec.split(",") if s.strip()] if spec else None
+    if flights:
+        d = cfg.get("jacobian", "dir", default=".")
+        return [(f, os.path.join(d, f + ".nc")) for f in flights]
+    path = cfg.get("jacobian", "path")
+    return [(os.path.splitext(os.path.basename(path))[0], path)]
 
 
-def _offset_pieces(cfg, n_obs):
-    """Return (block, operator, covariance) for the background-offset block, or None."""
-    n_offsets = cfg.get_int("offset", "n_groups", default=0)
-    if n_offsets <= 0:
+def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
+    """Build the inventory-independent context for one or more flights.
+
+    Each flight's Jacobian is read once and masked to the active cells; the flux
+    state is shared, so the per-flight forward operators are stacked by rows
+    (:class:`goe.BlockRow`), observations and backgrounds are concatenated, and
+    the observation-error covariances form a block-diagonal (errors correlate
+    within a flight, not across flights). ``flights`` selects which flights to
+    assimilate (see :func:`flight_paths`) — this is how single days and
+    combinations are run for experiments.
+    """
+    paths = flight_paths(cfg, flights)
+    in_memory = cfg.get_bool("jacobian", "in_memory", default=True)
+    row_chunk = cfg.get_int("jacobian", "row_chunk", default=16)
+    error_stddev = cfg.get_float("observations", "error_stddev", default=0.02)
+    inflation = cfg.get_float("observations", "error_inflation", default=1.0)
+    components = cfg.get("observations", "error_model", default="simple") == "components"
+
+    grid = core = priors = None
+    jfs, bases, backgrounds, zs, raws, Rs, flight_ids, flight_index = [], [], [], [], [], [], [], []
+    for fi, (fid, path) in enumerate(paths):
+        jf = JacobianFile(path)
+        if grid is None:
+            grid = jf.grid
+            bbox = cfg.get_literal("domain", "bbox", default=None)
+            mask = grid.bbox_mask(*bbox) if bbox is not None else None
+            core = GriddedState(grid, mask, name="core")
+            priors = category_priors_on_grid(
+                cfg.get("emissions", "path"), grid, sources=tuple(inventories))
+        elif jf.grid.shape != grid.shape:
+            raise ValueError(f"flight {fid!r} has grid {jf.grid.shape}, expected {grid.shape}")
+
+        base_f = jf.operator(active=core.active, in_memory=in_memory, row_chunk=row_chunk)
+        sens = base_f.matvec(np.ones(core.n_active))
+        bg_f = receptor_background(jf, cfg, domain_sensitivity=sens)
+        obs_f = build_observations(jf.receptor_obs, error_stddev=error_stddev,
+                                   baseline=bg_f, error_inflation=inflation)
+        R_f = (build_obs_error_covariance(jf.receptor_lat, jf.receptor_lon, cfg)
+               if components else obs_f.R)
+
+        jfs.append(jf); bases.append(base_f); backgrounds.append(bg_f)
+        zs.append(obs_f.z); raws.append(obs_f.raw); Rs.append(R_f)
+        flight_ids.append(fid)
+        flight_index.append(np.full(jf.n_receptors, fi, dtype=int))
+
+    base = bases[0] if len(bases) == 1 else BlockRow(bases)
+    R = Rs[0] if len(Rs) == 1 else BlockDiagonalCovariance(Rs)
+    background = np.concatenate(backgrounds)
+    obs = Observations(z=np.concatenate(zs), R=R,
+                       raw=np.concatenate(raws), baseline=background)
+    return InversionContext(cfg, grid, core, base, background, obs, priors,
+                            jfs, flight_ids, np.concatenate(flight_index))
+
+
+def _offset_pieces(cfg, flight_index):
+    """Background-offset block: one optimized offset per flight, or None.
+
+    Each flight gets its own additive background offset (its observations map to
+    its flight's offset parameter). For a single flight this is one offset.
+    """
+    if cfg.get_int("offset", "n_groups", default=0) <= 0:
         return None
-    assignments = (np.zeros(n_obs, dtype=int) if n_offsets == 1
-                   else np.arange(n_obs) % n_offsets)
-    blk, op = offset_block(assignments, n_offsets, name="bc")
-    cov = DiagonalCovariance.isotropic(n_offsets, cfg.get_float("offset", "stddev", default=0.05) ** 2)
+    flight_index = np.asarray(flight_index, dtype=int)
+    n_flights = int(flight_index.max()) + 1
+    blk, op = offset_block(flight_index, n_flights, name="bc")
+    cov = DiagonalCovariance.isotropic(n_flights, cfg.get_float("offset", "stddev", default=0.05) ** 2)
     return blk, op, cov
 
 
@@ -215,7 +261,8 @@ def invert(
     n_obs = ctx.obs.n_obs
     unit_scale = cfg.get_float("flux", "unit_scale", default=1.0)
     unit_label = cfg.get("flux", "unit_label", default="prior-units x m^2 (native)")
-    offset = _offset_pieces(cfg, n_obs)
+    flight_index = ctx.flight_index if ctx.flight_index is not None else np.zeros(n_obs, dtype=int)
+    offset = _offset_pieces(cfg, flight_index)
 
     def _append_offset(blocks, operators, cov_blocks):
         if offset is not None:

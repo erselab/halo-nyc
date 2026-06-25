@@ -66,6 +66,11 @@ nyc_ch4_emissions.h5 ─► emissions.py  ─► prior field(s) regridded onto J
 The expensive Jacobian read is done **once** per run (`pipeline.load_context`) and
 reused — including across the three inventories in `--compare` mode.
 
+For **multiple flights** the flux state is shared and each flight contributes its
+own block of observation rows (`goe.BlockRow`), its own background, error
+covariance (`BlockDiagonalCovariance`), and background-offset group. Select flights
+in the config (`[jacobian] flights`) or at the CLI (`--flights`); see below.
+
 ---
 
 ## Key concepts
@@ -77,6 +82,22 @@ reused — including across the three inventories in `--compare` mode.
 its own sub-category breakdown. **They are never summed.** A single inversion uses
 one as the prior (`[emissions] inventory`); `--compare` inverts each separately
 and tabulates the posteriors to show how prior-dependent the answer is.
+
+### Multiple flights (shared flux, stacked observations)
+
+A run assimilates one or more flights. The **flux state is shared** across flights;
+each flight contributes its own observation rows (its Jacobian stacked with
+`goe.BlockRow`), its own per-flight background, its own observation-error
+covariance (the flights form a `BlockDiagonalCovariance` — errors correlate within
+a flight, not across), and its own optimized **background-offset** group. This is
+the lever that raises information content: degrees-of-freedom-for-signal is ~1–2
+per flight, so combining flights is what makes the flux (and the `R`/`Sa` error
+split) identifiable.
+
+Flights are selected by id (the Jacobian file stem, e.g. `20230726_1`) via
+`[jacobian] flights`, the `--flights` CLI override, or `load_context(cfg, ...,
+flights=[...])` — so single days and arbitrary combinations are easy to run for
+experiments. Outputs tag each receptor with its flight (`receptor_flight`).
 
 ### Background (per-flight planar, lower-envelope)
 
@@ -148,8 +169,8 @@ yields a physically defensible sectoral attribution.
 | file | role |
 |---|---|
 | `__init__.py` | bootstraps `goe`/`adapters` onto `sys.path` (or use `GOE_INVERSION_PATH`) |
-| `pipeline.py` | reusable `load_context` (one Jacobian read) + `invert` (all modes) |
-| `run_halo.py` | CLI: single run, `--compare`, `--inventory`; reads `config.ini` |
+| `pipeline.py` | `load_context` (per-flight reads, stacked) + `flight_paths` + `invert` (all modes) |
+| `run_halo.py` | CLI: single run, `--compare`, `--inventory`, `--flights`, `--tune`; reads `config.ini` |
 | `background.py` | per-flight lower-envelope planar background (domain-insensitive receptors) |
 | `obs_error.py` | component-wise `R`: measurement ⊕ along-track-correlated model-data mismatch |
 | `emissions.py` | regrid inventory totals / per-sub-category fields onto the Jacobian grid |
@@ -167,7 +188,8 @@ yields a physically defensible sectoral attribution.
 All settings are read from `config.ini`; the notebook reads the same file, so it
 stays in sync with the CLI. Sections:
 
-- `[jacobian]` — `path`, `in_memory`, `row_chunk`
+- `[jacobian]` — `dir` + `flights` (comma-separated flight ids, assimilated jointly;
+  overridable with `--flights`), or a single `path` (back-compat); `in_memory`, `row_chunk`
 - `[domain]` — `bbox = [lat_min, lat_max, lon_min, lon_max]` (the NYC core mask)
 - `[emissions]` — `path`, `inventory` (primary prior), `compare` (list for `--compare`)
 - `[background]` — `method` (planar|constant), `degree`, `envelope_quantile`, `n_iter`,
@@ -207,6 +229,10 @@ python -m halo_oe.run_halo halo_oe/config.ini --compare
 
 # report model-data-mismatch diagnostics + max-likelihood error scales (non-destructive)
 python -m halo_oe.run_halo halo_oe/config.ini --tune
+
+# assimilate specific flights (single day, or any combination) for experiments
+python -m halo_oe.run_halo halo_oe/config.ini --flights 20230726_1
+python -m halo_oe.run_halo halo_oe/config.ini --flights 20230726_1,20230726_2,20230728_1
 ```
 
 Decomposition is enabled via config (`[decomposition] enabled = true` and
@@ -221,11 +247,55 @@ from goe.config import Config
 from halo_oe.pipeline import load_context, invert
 
 cfg = Config("halo_oe/config.ini")
-ctx = load_context(cfg, inventories=["pitt"])          # reads the Jacobian once
-res = invert(ctx, "pitt",
-                            decompose=True, method="category_fields")
+# one or more flights (shared flux state); reads each Jacobian once
+ctx = load_context(cfg, inventories=["pitt"], flights=["20230726_1", "20230726_2"])
+res = invert(ctx, "pitt", decompose=True, method="category_fields")
 print(res.report.as_table())                            # per-category totals + uncertainty
 ```
+
+---
+
+## The walkthrough notebook (`halo_inversion_walkthrough.ipynb`)
+
+A 12-step, runnable tour of one inversion, each stage exposed for inspection.
+It reads the **same `config.ini`** as the CLI, so its results match
+`run_halo.py`. It is **single-flight by design** (one Jacobian, ~2 min to run);
+multi-flight assimilation is exercised via the CLI / `load_context(..., flights=[...])`.
+
+### Configuration it runs with
+
+As shipped (`config.ini`), the notebook's main inversion (steps 1–10) is:
+
+- **State vector** — flight `20230726_1` (1271 receptors); NYC core mask
+  `bbox = [40.4, 41.1, -74.3, -73.5]` (~6,942 active cells); prior inventory
+  **Pittsburgh**. State = a per-cell multiplicative **scalar field on the
+  Pittsburgh total** (prior mean 1) **+ one background offset** (`bc`), ≈ 6,943
+  unknowns. (Step 12's `category_fields` decomposition expands this to a per-cell
+  field *per* super-category + `bc`.)
+- **Observations & background** — column XCH₄ minus a **per-flight planar
+  background**: degree-1, lower-envelope (`envelope_quantile 0.25`, `n_iter 5`),
+  **fit only on domain-insensitive receptors** (`domain_sensitivity_quantile 0.5`)
+  and evaluated at all. One optimized background **offset** per flight
+  (prior σ 0.02 ppm).
+- **Uncertainties** — flux-scalar prior σ **0.5** with **5 km** spatial
+  correlation; observation error `R` = **diagonal σ 0.02 ppm** (`error_model =
+  simple`); outlier rejection **off** (`outlier_threshold = 0`).
+- **Category decomposition** — grouping by keyword (Pittsburgh → natural_gas,
+  landfill, wastewater, combustion, other); per-category prior uncertainty
+  **0.5**; per-category prior-error structure: **natural_gas & combustion = 5 km
+  spatial** (diffuse), **landfill, wastewater, other = diagonal** (point sources).
+
+### Where the notebook intentionally goes beyond the config (to demonstrate options)
+
+| Step | `config.ini` | The notebook also shows |
+|---|---|---|
+| 8b (model-data mismatch) | `error_model = simple` | builds the **`components` correlated `R`** and compares reduced χ² + error tuning |
+| 8c (outliers) | `outlier_threshold = 0` (off) | **flags** at 4σ (`innovation`) and maps the flag (illustrative; not dropped) |
+| 12 (decomposition) | `enabled = false` | **forces it on** with `method = category_fields` |
+
+So steps 1–10 are faithful to the config; 8b/8c/12 are teaching overrides. Edit
+`config.ini` (e.g. `error_model = components`, `outlier_threshold = 4`,
+`decomposition.enabled = true`) and re-run to make the CLI behave like those steps.
 
 ---
 
@@ -238,6 +308,7 @@ python halo_oe/tests/test_flux.py
 python halo_oe/tests/test_background.py
 python halo_oe/tests/test_decomposition.py
 python halo_oe/tests/test_obs_error.py
+python halo_oe/tests/test_multiflight.py
 ```
 
 Key invariants checked: the background fit recovers a plane under a synthetic
@@ -258,9 +329,9 @@ kt CH₄ yr⁻¹).
 
 ### Remaining work toward a defensible number
 
-1. **Multi-flight assimilation** — stack all six flights (each with its own
-   background and offset) into one joint constraint. DOFS ~1–2 per flight is the
-   core limitation.
+1. **Multi-flight experiments** — multi-flight assimilation is implemented
+   (`--flights`); run flight combinations to raise DOFS (≈1.2 for one flight,
+   ≈2.5 for two) and identify the error split. Assimilating all six is the goal.
 2. **Domain + buffer** — enlarge the core mask and add a coarse buffer ring so
    just-outside emissions don't alias inward.
 3. **Error budget** — the component-wise, along-track-correlated `R` and the
