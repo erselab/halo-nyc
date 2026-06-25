@@ -34,6 +34,7 @@ from goe import desroziers_diagnostics, tune_variance_scales  # noqa: E402
 from adapters.io import write_posterior  # noqa: E402
 
 from halo_oe.pipeline import invert, load_context  # noqa: E402
+from halo_oe.io_bundle import save_inversion  # noqa: E402
 
 
 def _split(s):
@@ -96,7 +97,7 @@ def _report_tuning(cfg, res):
 
 
 def run(config_path: str, inventory: str | None = None, tune: bool = False,
-        flights=None) -> str:
+        flights=None, save=None) -> str:
     """Run a single inversion with the primary (or overridden) inventory."""
     cfg = Config(config_path)
     inv = inventory or cfg.get("emissions", "inventory", default="pitt")
@@ -142,6 +143,12 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False,
     if res.diagnostics.get("n_outliers", 0):
         print(f"  flagged {int(res.diagnostics['n_outliers'])} outlier receptors "
               f"(saved as 'outlier_flag')")
+
+    save_dir = save or cfg.get("output", "bundle_dir", default=None)
+    if save_dir:
+        save_inversion(save_dir, ctx, res)
+        print(f"Saved reusable inversion bundle to {save_dir}/  "
+              f"(reload with halo_oe.io_bundle.load_inversion)")
     for jf in ctx.jfs:
         jf.close()
     return out_path
@@ -197,12 +204,16 @@ def main():
     p.add_argument("--flights", default=None,
                    help="Comma-separated flight ids to assimilate jointly (overrides "
                         "[jacobian] flights), e.g. 20230726_1,20230726_2.")
+    p.add_argument("--save", default=None, metavar="DIR",
+                   help="Save a reusable inversion bundle to DIR (prior+posterior, "
+                        "observations, factors) for post-hoc analysis without re-solving.")
     args = p.parse_args()
     flights = _split(args.flights) if args.flights else None
     if args.compare:
         run_compare(args.config, flights=flights)
     else:
-        run(args.config, inventory=args.inventory, tune=args.tune, flights=flights)
+        run(args.config, inventory=args.inventory, tune=args.tune, flights=flights,
+            save=args.save)
 
 
 if __name__ == "__main__":

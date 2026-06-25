@@ -177,6 +177,7 @@ yields a physically defensible sectoral attribution.
 | `groups.py` | configurable keyword grouping of sub-categories into super-categories |
 | `decomposition.py` | the three attribution methods + per-category covariance builder |
 | `flux.py` | integrate scalars × prior × cell-area → totals with uncertainty (`linear_estimate`) |
+| `io_bundle.py` | save/reload a complete inversion (prior+posterior, observations, factors) for post-hoc analysis |
 | `config.ini` | all settings (see below) |
 | `halo_inversion_walkthrough.ipynb` | step-by-step notebook (reads the same `config.ini`) |
 | `tests/` | synthetic unit tests (`test_flux`, `test_background`, `test_decomposition`, `test_obs_error`) |
@@ -254,6 +255,40 @@ print(res.report.as_table())                            # per-category totals + 
 ```
 
 ---
+
+## Saving an inversion for post-hoc analysis
+
+Re-reading the multi-gigabyte Jacobians for every new analysis is unnecessary:
+**aggregation and disaggregation are linear functionals of the posterior**, so a
+solved inversion can be saved and reused without the forward operator. Run once
+with `--save` (or `[output] bundle_dir`):
+
+```bash
+python -m halo_oe.run_halo halo_oe/config.ini --flights 20230726_1,20230726_2 --save runs/jul26_both
+```
+
+This writes a directory bundle: `factors.npz` (posterior mean + the covariance
+factors `Sa`/`W = Sa Hᵀ`/Cholesky of `G`, which reproduce `aᵀx̂` and `aᵀŜa`
+*exactly* — no operator), `fields.nc` (geometry, super-category prior fields on
+active cells, per-receptor obs/background/enhancement/modeled/flight/outlier
+flag), and `layout.json` / `report.json` / `config.ini`. A bundle is tens of MB
+(dominated by `W`), even carrying the full cross-covariance.
+
+Reload it instantly and re-analyze:
+
+```python
+from halo_oe.io_bundle import load_inversion
+inv = load_inversion("runs/jul26_both")
+inv.estimate(A)        # (A x̂, A Ŝ Aᵀ) for any functional A — exact, no Jacobian
+inv.field("pitt")      # posterior scalar field on the grid
+inv.group_fields       # super-category priors (active cells) for re-grouping
+inv.receptors          # obs / background / enhancement / modeled / flight / flag
+```
+
+`inv.posterior`, `inv.state`, `inv.core`, `inv.grid`, and `inv.group_fields` plug
+straight into the `flux` / `decomposition` helpers, so you can re-aggregate,
+re-attribute by prior variance, or re-group categories with no re-solve. Bundles
+are git-ignored (`*.npz`, `runs/`, `*_bundle/`) — keep them off GitHub.
 
 ## The walkthrough notebook (`halo_inversion_walkthrough.ipynb`)
 

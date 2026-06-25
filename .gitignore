@@ -5,6 +5,10 @@ flight_data/
 *.nc
 *.nc4
 *.npy
+*.npz
+# Saved inversion bundles (save_inversion output dirs)
+*_bundle/
+runs/
 
 # Python / OS junk
 __pycache__/
