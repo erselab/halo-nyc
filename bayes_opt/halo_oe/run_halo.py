@@ -25,6 +25,8 @@ import argparse
 import os
 import sys
 
+import numpy as np
+
 # importing the package wires goe/adapters onto sys.path (see halo_oe/__init__.py)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402  (side effect: makes goe/adapters importable)
@@ -33,8 +35,13 @@ from goe.config import Config  # noqa: E402
 from goe import desroziers_diagnostics, tune_variance_scales  # noqa: E402
 from adapters.io import write_posterior  # noqa: E402
 
-from halo_oe.pipeline import invert, load_context  # noqa: E402
+from adapters.jacobian_operator import JacobianFile  # noqa: E402
+from adapters.gridded_state import GriddedState  # noqa: E402
+
+from halo_oe.pipeline import invert, load_context, flight_paths  # noqa: E402
 from halo_oe.io_bundle import save_inversion  # noqa: E402
+from halo_oe.emissions import category_priors_on_grid  # noqa: E402
+from halo_oe.diagnostics import out_of_core_sensitivity, summarize_out_of_core  # noqa: E402
 
 
 def _split(s):
@@ -191,6 +198,64 @@ def run_compare(config_path: str, flights=None) -> None:
         jf.close()
 
 
+def diagnose_domain(config_path: str, flights=None) -> None:
+    """Report how much receptor sensitivity falls OUTSIDE the core mask.
+
+    Streams each flight's full Jacobian once and prints the fraction of column
+    sensitivity (raw and emission-weighted) outside the core — the data-driven
+    test for whether a buffer region (or a larger core) is needed. Writes a
+    per-receptor netCDF for mapping which receptors see outside the domain.
+    """
+    import netCDF4
+    cfg = Config(config_path)
+    inv = cfg.get("emissions", "inventory", default="pitt")
+    bbox = cfg.get_literal("domain", "bbox", default=None)
+    row_chunk = cfg.get_int("jacobian", "row_chunk", default=16)
+
+    grid = core = prior = None
+    rows, per_receptor = [], []
+    for fid, path in flight_paths(cfg, flights):
+        jf = JacobianFile(path)
+        if grid is None:
+            grid = jf.grid
+            mask = grid.bbox_mask(*bbox) if bbox is not None else None
+            core = GriddedState(grid, mask, name="core")
+            prior = category_priors_on_grid(cfg.get("emissions", "path"), grid, sources=(inv,))[inv]
+        res = out_of_core_sensitivity(jf, core, prior_field=prior, row_chunk=row_chunk)
+        rows.append((fid, summarize_out_of_core(res)))
+        per_receptor.append((fid, np.asarray(jf.receptor_lat), np.asarray(jf.receptor_lon), res))
+        jf.close()
+
+    print(f"Out-of-core sensitivity  (core bbox {bbox}, inventory {inv}, "
+          f"{core.n_active} of {grid.n_cells} cells active)")
+    print(f"{'flight':<12} {'weighting':<10} {'integrated':>11} {'p50':>7} {'p75':>7} {'p90':>7}")
+    print("-" * 60)
+    for fid, summ in rows:
+        for name, s in summ.items():
+            print(f"{fid:<12} {name:<10} {s['integrated_fraction_outside']:>11.3f} "
+                  f"{s['receptor_fraction_p50']:>7.3f} {s['receptor_fraction_p75']:>7.3f} "
+                  f"{s['receptor_fraction_p90']:>7.3f}")
+    print("\nThe emission-weighted 'integrated' value is the headline: the fraction of the\n"
+          "explained enhancement originating outside the core. If it is sizeable, add a\n"
+          "buffer region (or enlarge the core) until it becomes small.")
+
+    out = cfg.get("output", "path", default="halo_posterior.nc")
+    diag_path = os.path.splitext(out)[0] + "_domain_diag.nc"
+    lat = np.concatenate([p[1] for p in per_receptor])
+    lon = np.concatenate([p[2] for p in per_receptor])
+    flight_idx = np.concatenate([np.full(p[1].size, i) for i, p in enumerate(per_receptor)])
+    with netCDF4.Dataset(diag_path, "w") as ds:
+        ds.createDimension("receptor", lat.size)
+        ds.createVariable("receptor_lat", "f8", ("receptor",))[:] = lat
+        ds.createVariable("receptor_lon", "f8", ("receptor",))[:] = lon
+        v = ds.createVariable("receptor_flight", "i4", ("receptor",))
+        v.flight_ids = ", ".join(p[0] for p in per_receptor); v[:] = flight_idx
+        for name in per_receptor[0][3]:
+            frac = np.concatenate([p[3][name]["fraction_outside"] for p in per_receptor])
+            ds.createVariable(f"fraction_outside_{name}", "f8", ("receptor",))[:] = frac
+    print(f"Wrote per-receptor diagnostic to {diag_path}")
+
+
 def main():
     p = argparse.ArgumentParser(description="Run the HALO CH4 flux inversion.")
     p.add_argument("config", help="Path to the HALO inversion config (INI) file.")
@@ -207,9 +272,14 @@ def main():
     p.add_argument("--save", default=None, metavar="DIR",
                    help="Save a reusable inversion bundle to DIR (prior+posterior, "
                         "observations, factors) for post-hoc analysis without re-solving.")
+    p.add_argument("--diagnose-domain", action="store_true",
+                   help="Report the fraction of receptor sensitivity outside the core "
+                        "mask (whether a buffer region is needed); does not invert.")
     args = p.parse_args()
     flights = _split(args.flights) if args.flights else None
-    if args.compare:
+    if args.diagnose_domain:
+        diagnose_domain(args.config, flights=flights)
+    elif args.compare:
         run_compare(args.config, flights=flights)
     else:
         run(args.config, inventory=args.inventory, tune=args.tune, flights=flights,
