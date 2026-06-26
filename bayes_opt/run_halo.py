@@ -31,41 +31,43 @@ import numpy as np
 # Importing the package then wires goe/adapters onto sys.path (see halo_oe/__init__.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import halo_oe  # noqa: F401,E402  (side effect: makes goe/adapters importable)
-
-from goe.config import Config  # noqa: E402
-from goe import desroziers_diagnostics, tune_variance_scales  # noqa: E402
-from adapters.io import write_posterior  # noqa: E402
-
-from adapters.jacobian_operator import JacobianFile  # noqa: E402
 from adapters.gridded_state import GriddedState  # noqa: E402
-
-from halo_oe.pipeline import invert, load_context, flight_paths  # noqa: E402
-from halo_oe.io_bundle import save_inversion  # noqa: E402
-from halo_oe.emissions import category_priors_on_grid  # noqa: E402
+from adapters.io import write_posterior  # noqa: E402
+from adapters.jacobian_operator import JacobianFile  # noqa: E402
+from goe import desroziers_diagnostics, tune_variance_scales  # noqa: E402
+from goe.config import Config  # noqa: E402
 from halo_oe.diagnostics import out_of_core_sensitivity, summarize_out_of_core  # noqa: E402
+from halo_oe.emissions import category_priors_on_grid  # noqa: E402
+from halo_oe.io_bundle import load_inversion, save_inversion  # noqa: E402
+from halo_oe.pipeline import flight_paths, invert, load_context  # noqa: E402
+from halo_oe.plotting import plot_buffer_regions, plot_posterior, plot_residuals  # noqa: E402
 
 
 def _split(s):
     return [x.strip() for x in s.split(",") if x.strip()]
 
 
-def _run_dir(config_path: str, cfg) -> str:
-    """Directory that receives all run_halo.py outputs (created if needed).
+def _load_cfg(config_path, overrides=None):
+    """Load the config and apply any ``section.key=value`` CLI overrides."""
+    return Config(config_path).apply_overrides(overrides)
 
-    From ``[output] dir`` (default ``runs``); a relative value is resolved against
-    the config file's own directory so outputs land next to the config regardless
-    of the current working directory.
+
+def _run_dir(config_path: str, cfg, save=None) -> str:
+    """Directory that receives all of this run's outputs (created if needed).
+
+    The base is ``[output] dir`` (default ``runs``); a relative base is resolved
+    against the config file's own directory so outputs land next to the config
+    regardless of the working directory. ``--save NAME`` selects the run
+    subdirectory ``<base>/NAME`` (``NAME`` is used literally, so nested names like
+    ``jul/26`` are kept); an absolute ``NAME`` is used as-is. Without ``--save``
+    the base directory itself is used.
     """
-    d = cfg.get("output", "dir", default="runs")
-    if not os.path.isabs(d):
-        d = os.path.join(os.path.dirname(os.path.abspath(config_path)), d)
+    base = cfg.get("output", "dir", default="runs")
+    if not os.path.isabs(base):
+        base = os.path.join(os.path.dirname(os.path.abspath(config_path)), base)
+    d = base if not save else (save if os.path.isabs(save) else os.path.join(base, save))
     os.makedirs(d, exist_ok=True)
     return d
-
-
-def _in_run_dir(run_dir: str, name: str) -> str:
-    """Place ``name`` inside ``run_dir`` (absolute names are left untouched)."""
-    return name if os.path.isabs(name) else os.path.join(run_dir, os.path.basename(name))
 
 
 def _write_receptor_diagnostics(out_path, ctx, res):
@@ -124,9 +126,9 @@ def _report_tuning(cfg, res):
 
 
 def run(config_path: str, inventory: str | None = None, tune: bool = False,
-        flights=None, save=None) -> str:
+        flights=None, save=None, overrides=None) -> str:
     """Run a single inversion with the primary (or overridden) inventory."""
-    cfg = Config(config_path)
+    cfg = _load_cfg(config_path, overrides)
     inv = inventory or cfg.get("emissions", "inventory", default="pitt")
 
     decompose = cfg.get_bool("decomposition", "enabled", default=False)
@@ -163,8 +165,8 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False,
 
     xa = res.state.fill(0.0, **{b.name: (0.0 if b.name == "bc" else 1.0)
                                 for b in res.state.blocks})
-    run_dir = _run_dir(config_path, cfg)
-    out_path = _in_run_dir(run_dir, cfg.get("output", "path", default=f"halo_posterior_{inv}.nc"))
+    run_dir = _run_dir(config_path, cfg, save)
+    out_path = os.path.join(run_dir, "posterior.nc")
     write_posterior(out_path, res.state, res.posterior, prior_mean=xa, diagnostics=diag)
     _write_receptor_diagnostics(out_path, ctx, res)   # coords, obs, outlier_flag
     print(f"Wrote {out_path}")
@@ -172,20 +174,18 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False,
         print(f"  flagged {int(res.diagnostics['n_outliers'])} outlier receptors "
               f"(saved as 'outlier_flag')")
 
-    save_dir = save or cfg.get("output", "bundle_dir", default=None)
-    if save_dir:
-        save_dir = _in_run_dir(run_dir, save_dir)
-        save_inversion(save_dir, ctx, res)
-        print(f"Saved reusable inversion bundle to {save_dir}/  "
+    if save:   # --save also drops a reusable bundle alongside posterior.nc
+        save_inversion(run_dir, ctx, res)
+        print(f"Saved reusable inversion bundle to {run_dir}/  "
               f"(reload with halo_oe.io_bundle.load_inversion)")
     for jf in ctx.jfs:
         jf.close()
     return out_path
 
 
-def run_compare(config_path: str, flights=None) -> None:
+def run_compare(config_path: str, flights=None, overrides=None, save=None) -> None:
     """Invert each inventory separately (one Jacobian read) and tabulate results."""
-    cfg = Config(config_path)
+    cfg = _load_cfg(config_path, overrides)
     inventories = _split(cfg.get("emissions", "compare", default="edgar,epa,pitt"))
 
     ctx = load_context(cfg, inventories=inventories, flights=flights)
@@ -194,9 +194,7 @@ def run_compare(config_path: str, flights=None) -> None:
     print(f"Active core cells: {ctx.core.n_active} of {ctx.grid.n_cells}")
     print(f"Comparing inventories as alternative priors: {inventories}\n")
 
-    run_dir = _run_dir(config_path, cfg)
-    out_stem = _in_run_dir(run_dir, cfg.get("output", "path", default="halo_posterior.nc"))
-    stem, ext = os.path.splitext(out_stem)
+    run_dir = _run_dir(config_path, cfg, save)
 
     rows = []
     for inv in inventories:
@@ -206,8 +204,8 @@ def run_compare(config_path: str, flights=None) -> None:
                      r.scale_factor[0], res.diagnostics["reduced_chi_square"]))
         xa = res.state.fill(0.0, **{b.name: (0.0 if b.name == "bc" else 1.0)
                                     for b in res.state.blocks})
-        write_posterior(f"{stem}_{inv}{ext}", res.state, res.posterior,
-                        prior_mean=xa, diagnostics=res.diagnostics)
+        write_posterior(os.path.join(run_dir, f"posterior_{inv}.nc"), res.state,
+                        res.posterior, prior_mean=xa, diagnostics=res.diagnostics)
 
     label = cfg.get("flux", "unit_label", default="prior-units x m^2 (native)")
     print(f"{'inventory':<10} {'prior':>14} {'posterior':>14} {'± 1σ':>12} "
@@ -221,7 +219,7 @@ def run_compare(config_path: str, flights=None) -> None:
         jf.close()
 
 
-def diagnose_domain(config_path: str, flights=None) -> None:
+def diagnose_domain(config_path: str, flights=None, overrides=None, save=None) -> None:
     """Report how much receptor sensitivity falls OUTSIDE the core mask.
 
     Streams each flight's full Jacobian once and prints the fraction of column
@@ -230,7 +228,7 @@ def diagnose_domain(config_path: str, flights=None) -> None:
     per-receptor netCDF for mapping which receptors see outside the domain.
     """
     import netCDF4
-    cfg = Config(config_path)
+    cfg = _load_cfg(config_path, overrides)
     inv = cfg.get("emissions", "inventory", default="pitt")
     bbox = cfg.get_literal("domain", "bbox", default=None)
     row_chunk = cfg.get_int("jacobian", "row_chunk", default=16)
@@ -262,9 +260,8 @@ def diagnose_domain(config_path: str, flights=None) -> None:
           "explained enhancement originating outside the core. If it is sizeable, add a\n"
           "buffer region (or enlarge the core) until it becomes small.")
 
-    run_dir = _run_dir(config_path, cfg)
-    out = _in_run_dir(run_dir, cfg.get("output", "path", default="halo_posterior.nc"))
-    diag_path = os.path.splitext(out)[0] + "_domain_diag.nc"
+    run_dir = _run_dir(config_path, cfg, save)
+    diag_path = os.path.join(run_dir, "domain_diag.nc")
     lat = np.concatenate([p[1] for p in per_receptor])
     lon = np.concatenate([p[2] for p in per_receptor])
     flight_idx = np.concatenate([np.full(p[1].size, i) for i, p in enumerate(per_receptor)])
@@ -280,7 +277,81 @@ def diagnose_domain(config_path: str, flights=None) -> None:
     print(f"Wrote per-receptor diagnostic to {diag_path}")
 
 
-def plot_buffer_regions(config_path: str, flights=None, out_path: str | None = None) -> None:
+def size_core(config_path: str, flights=None, overrides=None, save=None,
+              fractions=(0.8, 0.9, 0.95, 0.99)) -> None:
+    """Suggest a core bounding box from where the data actually constrain flux.
+
+    Streams each flight's Jacobian once (no solve), builds the per-cell
+    emission-weighted sensitivity (explained enhancement), and reports, for each
+    target share of that signal, the smallest bounding box capturing it, the
+    number of grid cells inside (the would-be state size), and the share the box
+    actually captures. Pick the smallest box that captures most of the signal and
+    let the buffer absorb the rest. Writes the sensitivity field to a netCDF.
+    """
+    import netCDF4
+    from halo_oe.diagnostics import core_sizing
+
+    cfg = _load_cfg(config_path, overrides)
+    inv = cfg.get("emissions", "inventory", default="pitt")
+    bbox = cfg.get_literal("domain", "bbox", default=None)
+    row_chunk = cfg.get_int("jacobian", "row_chunk", default=16)
+
+    grid = prior = None
+    jfs = []
+    for fid, path in flight_paths(cfg, flights):
+        jf = JacobianFile(path)
+        if grid is None:
+            grid = jf.grid
+            prior = category_priors_on_grid(cfg.get("emissions", "path"), grid, sources=(inv,))[inv]
+        elif jf.grid.shape != grid.shape:
+            raise ValueError(f"flight {fid!r} has grid {jf.grid.shape}, expected {grid.shape}; "
+                             "all flights must share one grid for core sizing")
+        jfs.append(jf)
+    res = core_sizing(jfs, grid, prior, fractions=fractions, row_chunk=row_chunk)
+    for jf in jfs:
+        jf.close()
+
+    cur = (f"{grid.bbox_mask(*bbox).sum()} cells" if bbox is not None else "whole grid")
+    print(f"Core sizing  (inventory {inv}, {len(jfs)} flight(s); "
+          f"current [domain] bbox {bbox} -> {cur})")
+    print(f"effective constrained cells (participation ratio): {res['participation_ratio']:.1f}")
+    print(f"\n{'capture':>8} {'n_active':>9} {'actual':>8}   suggested bbox "
+          f"[lat_min, lat_max, lon_min, lon_max]")
+    print("-" * 78)
+    for r in res["rows"]:
+        b = r["bbox"]
+        print(f"{r['fraction_target']*100:>6.0f}% {r['n_active']:>9d} "
+              f"{r['captured_weighted']*100:>6.1f}%   "
+              f"[{b[0]:.3f}, {b[1]:.3f}, {b[2]:.3f}, {b[3]:.3f}]")
+    print("\nPick the smallest box that captures most of the signal; the buffer absorbs the\n"
+          "rest. Apply one with:  --set domain.bbox=\"[lat_min, lat_max, lon_min, lon_max]\"")
+
+    run_dir = _run_dir(config_path, cfg, save)
+    out_nc = os.path.join(run_dir, "core_sizing.nc")
+    with netCDF4.Dataset(out_nc, "w") as ds:
+        ds.createDimension("lat", grid.n_lat); ds.createDimension("lon", grid.n_lon)
+        ds.createVariable("lat", "f8", ("lat",))[:] = grid.lat
+        ds.createVariable("lon", "f8", ("lon",))[:] = grid.lon
+        ds.createVariable("sensitivity", "f4", ("lat", "lon"))[:] = \
+            res["sensitivity"].reshape(grid.shape)
+        ds.createVariable("explained_enhancement", "f4", ("lat", "lon"))[:] = \
+            res["weighted"].reshape(grid.shape)
+        ds.participation_ratio = res["participation_ratio"]
+        for r in res["rows"]:
+            setattr(ds, f"bbox_{int(r['fraction_target']*100)}pct", r["bbox"])
+    print(f"Wrote per-cell sensitivity field to {out_nc}")
+
+    try:
+        from halo_oe.plotting import plot_core_sizing
+        png = os.path.join(run_dir, "core_sizing.png")
+        plot_core_sizing(out_nc, out_path=png, current_bbox=bbox)
+        print(f"Wrote core-sizing map to {png}")
+    except Exception as exc:   # plotting is best-effort; the table/netCDF are the result
+        print(f"(skipped core-sizing plot: {exc})")
+
+
+def plot_buffer_regions(config_path: str, flights=None, out_path: str | None = None,
+                        overrides=None, save=None) -> None:
     """Map the core and buffer regions with their prior mean and diagonal σ.
 
     A prior-only diagnostic: builds the grid, core mask, buffer super-cells and the
@@ -297,11 +368,10 @@ def plot_buffer_regions(config_path: str, flights=None, out_path: str | None = N
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from halo_oe.buffer import build_buffer
     from matplotlib.patches import Rectangle
 
-    from halo_oe.buffer import build_buffer
-
-    cfg = Config(config_path)
+    cfg = _load_cfg(config_path, overrides)
     if not cfg.get_bool("buffer", "enabled", default=False):
         print("[buffer] enabled = false — nothing to plot. Enable the buffer first.")
         return
@@ -371,12 +441,11 @@ def plot_buffer_regions(config_path: str, flights=None, out_path: str | None = N
                  f"({buf.n_super} super-cells, mode={cfg.get('buffer', 'mode', default='coarse')}) "
                  f"— inventory {inv}  [{label}]")
 
-    run_dir = _run_dir(config_path, cfg)
+    run_dir = _run_dir(config_path, cfg, save)
     if out_path is None:
-        out = cfg.get("output", "path", default=f"halo_posterior_{inv}.nc")
-        out_path = os.path.splitext(_in_run_dir(run_dir, out))[0] + "_buffer_regions.png"
-    else:
-        out_path = _in_run_dir(run_dir, out_path)
+        out_path = os.path.join(run_dir, "buffer_regions.png")
+    elif not os.path.isabs(out_path):
+        out_path = os.path.join(run_dir, out_path)
     fig.savefig(out_path, dpi=130)
     plt.close(fig)
     print(f"Core: {core.n_active} cells;  buffer: {buf.n_super} super-cells over "
@@ -399,27 +468,46 @@ def main():
     p.add_argument("--flights", default=None,
                    help="Comma-separated flight ids to assimilate jointly (overrides "
                         "[jacobian] flights), e.g. 20230726_1,20230726_2.")
-    p.add_argument("--save", default=None, metavar="DIR",
-                   help="Save a reusable inversion bundle to DIR (prior+posterior, "
-                        "observations, factors) for post-hoc analysis without re-solving.")
+    p.add_argument("--save", default='runs/', metavar="NAME",
+                   help="Run subdirectory under [output] dir (e.g. --save 20230726_1 -> "
+                        "runs/20230726_1/); NAME is used literally, an absolute path is "
+                        "used as-is. All outputs (posterior.nc, diagnostics) go there, and "
+                        "a reusable inversion bundle is written alongside for post-hoc "
+                        "analysis. Without --save, outputs go directly in [output] dir.")
     p.add_argument("--diagnose-domain", action="store_true",
                    help="Report the fraction of receptor sensitivity outside the core "
                         "mask (whether a buffer region is needed); does not invert.")
+    p.add_argument("--size-core", action="store_true",
+                   help="Suggest core bounding boxes from where the data constrain flux "
+                        "(emission-weighted sensitivity); does not invert.")
     p.add_argument("--plot-buffer", nargs="?", const=True, default=None, metavar="PNG",
                    help="Map the core and buffer regions with their prior mean and "
                         "diagonal σ (prior-only; no solve). Optional output PNG path.")
+    p.add_argument("--plot-diagnostics", default=False, metavar="PNG",
+                   help="Plot the posterior fields and observation fitting diagnostics.")
+    p.add_argument("--set", dest="overrides", action="append", default=[],
+                   metavar="SECTION.KEY=VALUE",
+                   help="Override a config value without editing the file; repeatable. "
+                        "E.g. --set buffer.enabled=true --set prior.scalar_stddev=0.3")
     args = p.parse_args()
     flights = _split(args.flights) if args.flights else None
+    ov = args.overrides
     if args.plot_buffer is not None:
-        plot_buffer_regions(args.config, flights=flights,
+        plot_buffer_regions(args.config, flights=flights, overrides=ov, save=args.save,
                             out_path=None if args.plot_buffer is True else args.plot_buffer)
     elif args.diagnose_domain:
-        diagnose_domain(args.config, flights=flights)
+        diagnose_domain(args.config, flights=flights, overrides=ov, save=args.save)
+    elif args.size_core:
+        size_core(args.config, flights=flights, overrides=ov, save=args.save)
     elif args.compare:
-        run_compare(args.config, flights=flights)
+        run_compare(args.config, flights=flights, overrides=ov, save=args.save)
     else:
         run(args.config, inventory=args.inventory, tune=args.tune, flights=flights,
-            save=args.save)
+            save=args.save, overrides=ov)
+        if args.plot_diagnostics is not None:
+            plot_posterior(load_inversion('runs/' + args.save), out_path='runs/' + args.save)
+            plot_residuals('runs/' + args.save, out_path='runs/' + args.save)
+
 
 
 if __name__ == "__main__":

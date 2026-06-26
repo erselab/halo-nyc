@@ -20,7 +20,8 @@ import halo_oe  # noqa: F401,E402
 
 from adapters.gridded_state import Grid, GriddedState  # noqa: E402
 from adapters.jacobian_operator import JacobianFile  # noqa: E402
-from halo_oe.diagnostics import out_of_core_sensitivity, summarize_out_of_core  # noqa: E402
+from halo_oe.diagnostics import (  # noqa: E402
+    core_sizing, out_of_core_sensitivity, summarize_out_of_core)
 
 try:
     import netCDF4  # noqa: E402
@@ -100,6 +101,60 @@ def test_emission_weighting_changes_fraction():
             su = summarize_out_of_core(res)
             assert su["emission"]["integrated_fraction_outside"] > \
                    su["uniform"]["integrated_fraction_outside"]
+
+
+def test_core_sizing_concentrated_signal():
+    if not HAVE_DEPS:
+        print("  skip test_core_sizing_concentrated_signal (deps missing)")
+        return
+    rng = np.random.default_rng(3)
+    n_rec = 30
+    g = Grid(LAT, LON)
+    # sensitivity present everywhere, but emission concentrated in a small patch
+    H = rng.uniform(0.0, 0.02, (n_rec, g.n_lat, g.n_lon))
+    patch = g.bbox_mask(40.4, 40.6, -74.1, -73.9)        # small central box
+    prior = np.where(patch, 5.0, 1e-3)                   # signal dominated by the patch
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "f.nc")
+        _write_jacobian(path, n_rec, H)
+        with JacobianFile(path) as jf:
+            res = core_sizing([jf], g, prior, fractions=(0.8, 0.95))
+
+    rows = res["rows"]
+    assert [r["fraction_target"] for r in rows] == [0.8, 0.95]
+    # boxes actually capture at least the requested share, and grow with the target
+    for r in rows:
+        assert r["captured_weighted"] >= r["fraction_target"] - 1e-9
+    assert rows[1]["n_active"] >= rows[0]["n_active"]
+    # the suggested 80% box sits within the emission patch's neighbourhood
+    b = rows[0]["bbox"]
+    assert 40.3 <= b[0] and b[1] <= 40.7 and -74.2 <= b[2] and b[3] <= -73.8
+    # participation ratio is far below the full grid (signal is concentrated)
+    assert 0 < res["participation_ratio"] < g.n_cells
+
+
+def test_core_sizing_sums_flights():
+    if not HAVE_DEPS:
+        print("  skip test_core_sizing_sums_flights (deps missing)")
+        return
+    rng = np.random.default_rng(4)
+    g = Grid(LAT, LON)
+    H1 = rng.uniform(0, 0.02, (12, g.n_lat, g.n_lon))
+    H2 = rng.uniform(0, 0.02, (18, g.n_lat, g.n_lon))
+    prior = rng.uniform(0.1, 1.0, g.shape)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        p1, p2 = os.path.join(tmp, "f1.nc"), os.path.join(tmp, "f2.nc")
+        _write_jacobian(p1, 12, H1); _write_jacobian(p2, 18, H2)
+        with JacobianFile(p1) as jf1, JacobianFile(p2) as jf2:
+            from halo_oe.diagnostics import cell_sensitivity_field
+            sens, _ = cell_sensitivity_field([jf1, jf2], g, prior)
+            # combined sensitivity is the per-cell sum over BOTH flights' receptors
+            expect = H1.reshape(12, -1).sum(0) + H2.reshape(18, -1).sum(0)
+            assert np.allclose(sens, expect)
+            res = core_sizing([jf1, jf2], g, prior, fractions=(0.9,))
+            assert res["rows"][0]["captured_weighted"] >= 0.9 - 1e-9
 
 
 def _run_all():

@@ -1,0 +1,30 @@
+Flights (1): 20230726_1  -> 1271 observations
+Active core cells: 61716 of 2775556
+Inventory (prior): pitt
+Problem: 1271 obs x 311839 state; solved via observation-space form.  mode=category_fields
+Category grouping:
+  natural_gas: 3 sub-categories
+  other: 3 sub-categories
+  combustion: 2 sub-categories
+  wastewater: 1 sub-categories
+  landfill: 1 sub-categories
+  reduced_chi_square: 0.5201
+  n_obs_used: 1271
+  n_outliers: 0
+
+category              prior      posterior         ± 1σ    scale
+----------------------------------------------------------------
+natural_gas       2.809e+08      2.833e+08    8.314e+06    1.009
+landfill          1.267e+08      1.268e+08    6.306e+06    1.001
+wastewater        7.133e+07      7.151e+07    2.071e+06    1.003
+combustion        3.079e+07      3.082e+07    1.159e+06    1.001
+other             8.066e+07      8.066e+07     2.54e+05    1.000
+total             5.904e+08      5.931e+08    1.069e+07    1.005
+
+units: prior-units x m^2 (native)
+
+Wrote /Volumes/Expansion/halo-nyc/bayes_opt/runs/runs/posterior.nc
+Saved reusable inversion bundle to /Volumes/Expansion/halo-nyc/bayes_opt/runs/runs//  (reload with halo_oe.io_bundle.load_inversion)
+reduced chi-square (saved): 0.520   (~1 = error model consistent)
+residual: mean -0.0010  rms 0.0317 ppm  robust sigma(MAD) 0.0309 ppm
+  flight 20230726_1     n=1271  bias -0.0010  rms 0.0317 ppm

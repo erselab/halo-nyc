@@ -133,7 +133,9 @@ The magnitudes are hyperparameters. `run_halo.py --tune` reports the Desroziers
 consistency `r_scale` and the marginal-likelihood-optimal variance multipliers
 (`goe.tuning`), with the config edits to apply them. With one flight the `R`/`Sa`
 split is weakly identified (DOFS ~1–2) — tune `R` only until multi-flight data are
-available.
+available. See **[TUNING.md](TUNING.md)** for how to read the `--tune` diagnostics
+(including what to do when reduced χ² and `r_scale` disagree) and a step-by-step
+workflow.
 
 ### Category decomposition
 
@@ -189,6 +191,18 @@ super-cell geometry are saved in the bundle for post-hoc inspection
 (`SavedInversion.buffer`). Multi-flight runs stack the buffer operator across
 flights exactly like the core.
 
+**Choosing the core size.** `--size-core` streams the Jacobian once (no solve) and
+builds the per-cell *explained-enhancement* weight (`Σ_receptors H × prior`). It
+prints, for each target share of that signal (80/90/95/99%), the **smallest
+bounding box capturing it**, the cell count inside (the would-be state size), and a
+**participation ratio** `(Σw)²/Σw²` — a solve-free estimate of the *effective*
+number of cells carrying signal. Pick the smallest box that captures most of the
+signal and let the buffer absorb the rest; apply it with
+`--set domain.bbox="[…]"`. The per-cell sensitivity field is written to
+`core_sizing.nc` for mapping. Use it together with `--diagnose-domain` (which
+scores a *given* box) to converge on a core that is neither truncating signal nor
+padded with prior-dominated cells.
+
 ---
 
 ## Layout
@@ -220,10 +234,11 @@ path so `import halo_oe` works from any working directory.
 | `buffer.py` | coarse out-of-core buffer super-cells (`coarse` tiling or `mask` label field) |
 | `flux.py` | integrate scalars × prior × cell-area → totals with uncertainty (`linear_estimate`) |
 | `io_bundle.py` | save/reload a complete inversion (prior+posterior, observations, factors) for post-hoc analysis |
-| `diagnostics.py` | out-of-core sensitivity diagnostic (whether a buffer is needed) |
+| `diagnostics.py` | out-of-core sensitivity (whether a buffer is needed) + core-sizing (how big the core should be) |
 
 `run_halo.py` (top level) is the CLI: single run, `--compare`, `--inventory`,
-`--flights`, `--tune`, `--diagnose-domain`, `--plot-buffer`. `notebooks/` holds
+`--flights`, `--tune`, `--diagnose-domain`, `--size-core`, `--plot-buffer`.
+`notebooks/` holds
 `halo_inversion_walkthrough.ipynb` (step-by-step, reads the same `config.ini`) and
 `saved_bundle_analysis.ipynb` (post-hoc bundle reader). `tests/` holds the
 synthetic unit tests (`test_flux`, `test_background`, `test_decomposition`,
@@ -256,8 +271,9 @@ stays in sync with the CLI. Sections:
 - `[category_spatial]` — per-group decorrelation length km; `0` = diagonal (point source)
 - `[tuning]` — `tune_R`, `tune_Sa` (used by `run_halo.py --tune`)
 - `[flux]` — `unit_scale`, `unit_label`
-- `[output]` — `dir` (where all outputs go; default `runs`, relative to the config
-  file), `path` (posterior base filename), optional `bundle_dir`
+- `[output]` — `dir` (base directory for all outputs; default `runs`, relative to
+  the config file). Each run writes `posterior.nc` here; `--save NAME` puts a run in
+  `runs/NAME/`
 
 Paths in `config.ini` are relative to the file's own directory. Inline `#`/`;`
 comments after a value are supported (handled by `goe.config.Config`).
@@ -289,10 +305,24 @@ python run_halo.py config.ini --flights 20230726_1,20230726_2,20230728_1
 # is a buffer needed? fraction of receptor sensitivity outside the core (no solve)
 python run_halo.py config.ini --diagnose-domain
 
+# how big should the core be? suggest bboxes from where the data constrain flux (no solve)
+python run_halo.py config.ini --size-core
+
 # map the core + buffer regions with their prior mean and diagonal σ (no solve)
-python run_halo.py config.ini --plot-buffer            # PNG next to [output] path
+python run_halo.py config.ini --plot-buffer            # PNG in [output] dir (runs/)
 python run_halo.py config.ini --plot-buffer regions.png
+
+# override any config value without editing the file (repeatable)
+python run_halo.py config.ini --set buffer.enabled=true --set buffer.resolution_deg=0.1
+python run_halo.py config.ini --set prior.scalar_stddev=0.3 --set domain.bbox="[40.5,41.0,-74.2,-73.6]"
 ```
+
+`--set SECTION.KEY=VALUE` overrides a single config entry in memory for that run
+only (the file is untouched); repeat it for several overrides, and combine it with
+any mode (`--compare`, `--plot-buffer`, …). The section is everything before the
+last dot, so `--set category_groups.natural_gas="ng_, natural gas"` targets the
+`natural_gas` key. Overrides are applied before anything else, so a saved bundle's
+`config.ini` records the *effective* settings. Missing sections/keys are created.
 
 The `--plot-buffer` map is a prior-only check (built from Jacobian metadata, no
 large-array read): three panels over the core∪buffer window — prior mean flux
@@ -302,8 +332,16 @@ super-cell layout (`coarse` tiling or `mask` labels), the `outer_bbox` extent, a
 how loose the buffer prior is relative to the core.
 
 Decomposition is enabled via config (`[decomposition] enabled = true` and
-`method = …`), not a flag. Output is a netCDF with posterior scalar fields, their
-uncertainties, prior fields, and the integrated flux totals as attributes.
+`method = …`), not a flag. Output is `posterior.nc` (in the run directory) with
+posterior scalar fields, their uncertainties, prior fields, per-receptor
+diagnostics, and the integrated flux totals as attributes.
+
+**Output location.** All artifacts go under `[output] dir` (default `runs/`).
+Without `--save` they land directly there (`runs/posterior.nc`). `--save NAME`
+selects the run subdirectory `runs/NAME/` (NAME is used literally, so `--save
+jul/26` → `runs/jul/26/`; an absolute path is used as-is) and additionally writes a
+reusable inversion bundle into that same directory — so `runs/NAME/` holds both
+`posterior.nc` and the bundle, and reloads with `load_inversion("runs/NAME")`.
 
 ### As a library
 
@@ -326,18 +364,21 @@ print(res.report.as_table())                            # per-category totals + 
 Re-reading the multi-gigabyte Jacobians for every new analysis is unnecessary:
 **aggregation and disaggregation are linear functionals of the posterior**, so a
 solved inversion can be saved and reused without the forward operator. Run once
-with `--save` (or `[output] bundle_dir`):
+with `--save NAME`:
 
 ```bash
 python run_halo.py config.ini --flights 20230726_1,20230726_2 --save jul26_both
 ```
 
-This writes a directory bundle: `factors.npz` (posterior mean + the covariance
-factors `Sa`/`W = Sa Hᵀ`/Cholesky of `G`, which reproduce `aᵀx̂` and `aᵀŜa`
-*exactly* — no operator), `fields.nc` (geometry, super-category prior fields on
-active cells, per-receptor obs/background/enhancement/modeled/flight/outlier
-flag), and `layout.json` / `report.json` / `config.ini`. A bundle is tens of MB
-(dominated by `W`), even carrying the full cross-covariance.
+This puts the run in `runs/jul26_both/`, containing `posterior.nc` plus the
+directory bundle: `factors.npz` (posterior mean + the covariance factors
+`Sa`/`W = Sa Hᵀ`/Cholesky of `G`, which reproduce `aᵀx̂` and `aᵀŜa` *exactly* — no
+operator), `fields.nc` (geometry, super-category prior fields on active cells,
+per-receptor obs/background/enhancement/modeled/flight/outlier flag, and the
+buffer super-cell geometry if a buffer was used), and `layout.json` /
+`report.json` / `config.ini` (the *effective* config, including any `--set`
+overrides). The bundle proper is tens of MB (dominated by `W`), even carrying the
+full cross-covariance.
 
 Reload it instantly and re-analyze:
 
