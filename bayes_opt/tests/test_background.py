@@ -4,7 +4,7 @@ Builds synthetic flights = a known planar background + a localized positive
 "plume" + noise, and checks that the lower-envelope fit recovers the underlying
 plane (ignoring the plume) and that distinct flights yield distinct backgrounds.
 
-Run directly:  python halo_oe/tests/test_background.py
+Run directly:  python tests/test_background.py
 (from the bayes_opt directory, or with bayes_opt on PYTHONPATH).
 """
 
@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402
 
 from halo_oe.background import (  # noqa: E402

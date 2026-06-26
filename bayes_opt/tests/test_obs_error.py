@@ -4,7 +4,7 @@ Checks the local km projection, that R combines an independent measurement
 diagonal with a correlated model-data-mismatch term, and that the diagonal /
 correlated branches are selected by config. Synthetic; no real files.
 
-Run:  python halo_oe/tests/test_obs_error.py   (from bayes_opt/)
+Run:  python tests/test_obs_error.py   (from bayes_opt/)
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402
 
 from goe.covariance import DiagonalCovariance, SparseCovariance  # noqa: E402

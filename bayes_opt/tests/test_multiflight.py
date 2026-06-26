@@ -5,7 +5,7 @@ then checks that ``load_context`` stacks flights correctly (rows concatenated,
 shared columns, block-diagonal R, per-flight offset) and that a single-flight run
 still matches the un-stacked case. No large files.
 
-Run:  python halo_oe/tests/test_multiflight.py   (from bayes_opt/)
+Run:  python tests/test_multiflight.py   (from bayes_opt/)
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import tempfile
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402
 
 from goe.config import Config  # noqa: E402

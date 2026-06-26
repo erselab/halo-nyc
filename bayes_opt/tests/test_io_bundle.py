@@ -5,7 +5,7 @@ and checks that the reloaded posterior reproduces the mean and supports exact
 linear-functional aggregation (mean + covariance) without the forward operator —
 the whole point of saving for post-hoc analysis.
 
-Run:  python halo_oe/tests/test_io_bundle.py   (from bayes_opt/)
+Run:  python tests/test_io_bundle.py   (from bayes_opt/)
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import tempfile
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402
 
 from goe.config import Config  # noqa: E402

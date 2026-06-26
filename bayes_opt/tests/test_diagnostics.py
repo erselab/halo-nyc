@@ -4,7 +4,7 @@ Builds a synthetic Jacobian whose sensitivity is concentrated in a known region,
 then checks that the diagnostic correctly reports the fraction of sensitivity
 (raw and emission-weighted) falling outside a chosen core mask.
 
-Run:  python halo_oe/tests/test_diagnostics.py   (from bayes_opt/)
+Run:  python tests/test_diagnostics.py   (from bayes_opt/)
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import tempfile
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402
 
 from adapters.gridded_state import Grid, GriddedState  # noqa: E402

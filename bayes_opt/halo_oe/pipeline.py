@@ -33,6 +33,7 @@ from goe import (
 )
 from goe.config import Config
 from goe.operators import LinearOperator
+from goe.state import Block
 from adapters.covariance_builders import build_spatial_covariance
 from adapters.gridded_state import Grid, GriddedState
 from adapters.jacobian_operator import JacobianFile
@@ -42,6 +43,7 @@ from adapters.scaling_blocks import category_blocks, offset_block
 from .obs_error import build_obs_error_covariance
 
 from .background import receptor_background
+from .buffer import build_buffer
 from .decomposition import (
     assemble_category_scalar_state,
     category_covariance,
@@ -76,6 +78,8 @@ class InversionContext:
     jfs: list = field(default_factory=list)            # open JacobianFile per flight
     flight_ids: list = field(default_factory=list)     # flight identifier per flight
     flight_index: np.ndarray | None = None             # flight number per observation
+    buffer: object = None                              # halo_oe.buffer.Buffer, or None
+    buffer_op: object = None                           # forward operator for the buffer block
 
     @property
     def n_flights(self) -> int:
@@ -137,8 +141,9 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
     inflation = cfg.get_float("observations", "error_inflation", default=1.0)
     components = cfg.get("observations", "error_model", default="simple") == "components"
 
-    grid = core = priors = None
-    jfs, bases, backgrounds, zs, raws, Rs, flight_ids, flight_index = [], [], [], [], [], [], [], []
+    grid = core = priors = buffer = None
+    jfs, bases, buf_bases, backgrounds, zs, raws, Rs, flight_ids, flight_index = \
+        [], [], [], [], [], [], [], [], []
     for fi, (fid, path) in enumerate(paths):
         jf = JacobianFile(path)
         if grid is None:
@@ -148,10 +153,16 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
             core = GriddedState(grid, mask, name="core")
             priors = category_priors_on_grid(
                 cfg.get("emissions", "path"), grid, sources=tuple(inventories))
+            buffer = build_buffer(grid, core, cfg)      # None unless [buffer] enabled
         elif jf.grid.shape != grid.shape:
             raise ValueError(f"flight {fid!r} has grid {jf.grid.shape}, expected {grid.shape}")
 
-        base_f = jf.operator(active=core.active, in_memory=in_memory, row_chunk=row_chunk)
+        if buffer is not None:
+            base_f, buf_f = jf.operator_with_buffer(
+                core.active, buffer.membership, buffer.n_super, row_chunk=row_chunk)
+            buf_bases.append(buf_f)
+        else:
+            base_f = jf.operator(active=core.active, in_memory=in_memory, row_chunk=row_chunk)
         sens = base_f.matvec(np.ones(core.n_active))
         bg_f = receptor_background(jf, cfg, domain_sensitivity=sens)
         obs_f = build_observations(jf.receptor_obs, error_stddev=error_stddev,
@@ -165,12 +176,15 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
         flight_index.append(np.full(jf.n_receptors, fi, dtype=int))
 
     base = bases[0] if len(bases) == 1 else BlockRow(bases)
+    buffer_op = None
+    if buffer is not None:
+        buffer_op = buf_bases[0] if len(buf_bases) == 1 else BlockRow(buf_bases)
     R = Rs[0] if len(Rs) == 1 else BlockDiagonalCovariance(Rs)
     background = np.concatenate(backgrounds)
     obs = Observations(z=np.concatenate(zs), R=R,
                        raw=np.concatenate(raws), baseline=background)
     return InversionContext(cfg, grid, core, base, background, obs, priors,
-                            jfs, flight_ids, np.concatenate(flight_index))
+                            jfs, flight_ids, np.concatenate(flight_index), buffer, buffer_op)
 
 
 def _offset_pieces(cfg, flight_index):
@@ -186,6 +200,28 @@ def _offset_pieces(cfg, flight_index):
     blk, op = offset_block(flight_index, n_flights, name="bc")
     cov = DiagonalCovariance.isotropic(n_flights, cfg.get_float("offset", "stddev", default=0.05) ** 2)
     return blk, op, cov
+
+
+def _buffer_pieces(ctx, inventory):
+    """Coarse buffer block: one uniform out-of-core flux per super-cell, or None.
+
+    The buffer state holds an *absolute* flux density per super-cell (prior units),
+    so its operator is the pre-summed Jacobian ``ctx.buffer_op`` (no scaling). The
+    prior mean is the area-weighted inventory flux density over each super-cell, and
+    the prior std is ``[buffer] stddev`` relative to that mean (floored so empty
+    super-cells still get a finite prior).
+    """
+    if ctx.buffer is None or ctx.buffer_op is None:
+        return None
+    buf = ctx.buffer
+    sd = ctx.cfg.get_float("buffer", "stddev", default=1.0)
+    floor = ctx.cfg.get_float("buffer", "stddev_floor", default=0.0)
+    xa, sigma = buf.prior_moments(ctx.priors[inventory], sd, floor)
+    var = sigma ** 2
+    blk = Block(name="buffer", size=buf.n_super,
+                metadata={"kind": "buffer", "prior": xa,
+                          "center_lat": buf.center_lat, "center_lon": buf.center_lon})
+    return blk, ctx.buffer_op, DiagonalCovariance(var), xa
 
 
 def _finalize(problem, posterior, n_outliers=0):
@@ -263,11 +299,17 @@ def invert(
     unit_label = cfg.get("flux", "unit_label", default="prior-units x m^2 (native)")
     flight_index = ctx.flight_index if ctx.flight_index is not None else np.zeros(n_obs, dtype=int)
     offset = _offset_pieces(cfg, flight_index)
+    buffer_pc = _buffer_pieces(ctx, inventory)
+    buffer_xa = {}  # block-name -> prior-mean override for non-scalar blocks
 
     def _append_offset(blocks, operators, cov_blocks):
         if offset is not None:
             blk, op, cov = offset
             blocks.append(blk); operators["bc"] = op; cov_blocks.append(cov)
+        if buffer_pc is not None:
+            blk, op, cov, xa = buffer_pc
+            blocks.append(blk); operators["buffer"] = op; cov_blocks.append(cov)
+            buffer_xa["buffer"] = xa
 
     if decompose and method == "category_scalars":
         _, group_active, assignment = _group_fields(ctx, inventory)
@@ -277,7 +319,7 @@ def invert(
         state = StateSpace(blocks)
         Sa = BlockDiagonalCovariance(cov_blocks)
         xa = state.fill(0.0, **{b.name: (1.0 if b.name == "categories" else 0.0)
-                                for b in state.blocks})
+                                for b in state.blocks if b.name not in buffer_xa}, **buffer_xa)
         problem = GaussianLinearProblem(H=state.block_column(operators), z=ctx.obs.z,
                                         xa=xa, Sa=Sa, R=ctx.obs.R)
         problem, posterior, flagged = _solve_with_qc(problem, cfg)
@@ -298,7 +340,8 @@ def invert(
         _append_offset(blocks, operators, cov_blocks)
         state = StateSpace(blocks)
         Sa = BlockDiagonalCovariance(cov_blocks)
-        xa = state.fill(0.0, **{b.name: (0.0 if b.name == "bc" else 1.0) for b in state.blocks})
+        xa = state.fill(0.0, **{b.name: (0.0 if b.name == "bc" else 1.0)
+                            for b in state.blocks if b.name not in buffer_xa}, **buffer_xa)
         problem = GaussianLinearProblem(H=state.block_column(operators), z=ctx.obs.z,
                                         xa=xa, Sa=Sa, R=ctx.obs.R)
         problem, posterior, flagged = _solve_with_qc(problem, cfg)
@@ -324,7 +367,8 @@ def invert(
 
     state = StateSpace(blocks)
     Sa = BlockDiagonalCovariance(cov_blocks)
-    xa = state.fill(0.0, **{b.name: (0.0 if b.name == "bc" else 1.0) for b in state.blocks})
+    xa = state.fill(0.0, **{b.name: (0.0 if b.name == "bc" else 1.0)
+                            for b in state.blocks if b.name not in buffer_xa}, **buffer_xa)
     problem = GaussianLinearProblem(H=state.block_column(operators), z=ctx.obs.z,
                                     xa=xa, Sa=Sa, R=ctx.obs.R)
     problem, posterior, flagged = _solve_with_qc(problem, cfg)

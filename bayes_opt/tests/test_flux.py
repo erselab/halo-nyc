@@ -4,7 +4,7 @@ Validates cell-area computation, the generic linear-functional estimator against
 a dense reference, and the end-to-end flux report on a small synthetic problem
 built through the framework. No real data files are needed.
 
-Run directly:  python halo_oe/tests/test_flux.py
+Run directly:  python tests/test_flux.py
 (from the bayes_opt directory, or with bayes_opt on PYTHONPATH).
 """
 
@@ -16,7 +16,7 @@ import sys
 import numpy as np
 
 # make bayes_opt importable, then halo_oe wires goe/adapters onto the path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402
 
 from goe import (  # noqa: E402

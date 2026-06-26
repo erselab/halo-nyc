@@ -12,11 +12,10 @@ Use ``--compare`` to invert each separately and tabulate the posteriors, which
 shows how prior-dependent the flux estimate is — the Jacobian is read only once
 and reused across the three solves.
 
-Run:
-    python -m halo_oe.run_halo halo_oe/config.ini                 # primary inventory
-    python -m halo_oe.run_halo halo_oe/config.ini --inventory epa # override
-    python -m halo_oe.run_halo halo_oe/config.ini --compare       # all three
-(from the bayes_opt directory, or with bayes_opt on PYTHONPATH).
+Run (from the bayes_opt directory):
+    python run_halo.py config.ini                 # primary inventory
+    python run_halo.py config.ini --inventory epa # override
+    python run_halo.py config.ini --compare       # all three
 """
 
 from __future__ import annotations
@@ -27,8 +26,10 @@ import sys
 
 import numpy as np
 
-# importing the package wires goe/adapters onto sys.path (see halo_oe/__init__.py)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# this script lives at the bayes_opt top level; put that directory on the path so
+# the `halo_oe` package imports regardless of the current working directory.
+# Importing the package then wires goe/adapters onto sys.path (see halo_oe/__init__.py).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import halo_oe  # noqa: F401,E402  (side effect: makes goe/adapters importable)
 
 from goe.config import Config  # noqa: E402
@@ -46,6 +47,25 @@ from halo_oe.diagnostics import out_of_core_sensitivity, summarize_out_of_core  
 
 def _split(s):
     return [x.strip() for x in s.split(",") if x.strip()]
+
+
+def _run_dir(config_path: str, cfg) -> str:
+    """Directory that receives all run_halo.py outputs (created if needed).
+
+    From ``[output] dir`` (default ``runs``); a relative value is resolved against
+    the config file's own directory so outputs land next to the config regardless
+    of the current working directory.
+    """
+    d = cfg.get("output", "dir", default="runs")
+    if not os.path.isabs(d):
+        d = os.path.join(os.path.dirname(os.path.abspath(config_path)), d)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _in_run_dir(run_dir: str, name: str) -> str:
+    """Place ``name`` inside ``run_dir`` (absolute names are left untouched)."""
+    return name if os.path.isabs(name) else os.path.join(run_dir, os.path.basename(name))
 
 
 def _write_receptor_diagnostics(out_path, ctx, res):
@@ -143,7 +163,8 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False,
 
     xa = res.state.fill(0.0, **{b.name: (0.0 if b.name == "bc" else 1.0)
                                 for b in res.state.blocks})
-    out_path = cfg.get("output", "path", default=f"halo_posterior_{inv}.nc")
+    run_dir = _run_dir(config_path, cfg)
+    out_path = _in_run_dir(run_dir, cfg.get("output", "path", default=f"halo_posterior_{inv}.nc"))
     write_posterior(out_path, res.state, res.posterior, prior_mean=xa, diagnostics=diag)
     _write_receptor_diagnostics(out_path, ctx, res)   # coords, obs, outlier_flag
     print(f"Wrote {out_path}")
@@ -153,6 +174,7 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False,
 
     save_dir = save or cfg.get("output", "bundle_dir", default=None)
     if save_dir:
+        save_dir = _in_run_dir(run_dir, save_dir)
         save_inversion(save_dir, ctx, res)
         print(f"Saved reusable inversion bundle to {save_dir}/  "
               f"(reload with halo_oe.io_bundle.load_inversion)")
@@ -172,7 +194,8 @@ def run_compare(config_path: str, flights=None) -> None:
     print(f"Active core cells: {ctx.core.n_active} of {ctx.grid.n_cells}")
     print(f"Comparing inventories as alternative priors: {inventories}\n")
 
-    out_stem = cfg.get("output", "path", default="halo_posterior.nc")
+    run_dir = _run_dir(config_path, cfg)
+    out_stem = _in_run_dir(run_dir, cfg.get("output", "path", default="halo_posterior.nc"))
     stem, ext = os.path.splitext(out_stem)
 
     rows = []
@@ -239,7 +262,8 @@ def diagnose_domain(config_path: str, flights=None) -> None:
           "explained enhancement originating outside the core. If it is sizeable, add a\n"
           "buffer region (or enlarge the core) until it becomes small.")
 
-    out = cfg.get("output", "path", default="halo_posterior.nc")
+    run_dir = _run_dir(config_path, cfg)
+    out = _in_run_dir(run_dir, cfg.get("output", "path", default="halo_posterior.nc"))
     diag_path = os.path.splitext(out)[0] + "_domain_diag.nc"
     lat = np.concatenate([p[1] for p in per_receptor])
     lon = np.concatenate([p[2] for p in per_receptor])
@@ -254,6 +278,112 @@ def diagnose_domain(config_path: str, flights=None) -> None:
             frac = np.concatenate([p[3][name]["fraction_outside"] for p in per_receptor])
             ds.createVariable(f"fraction_outside_{name}", "f8", ("receptor",))[:] = frac
     print(f"Wrote per-receptor diagnostic to {diag_path}")
+
+
+def plot_buffer_regions(config_path: str, flights=None, out_path: str | None = None) -> None:
+    """Map the core and buffer regions with their prior mean and diagonal σ.
+
+    A prior-only diagnostic: builds the grid, core mask, buffer super-cells and the
+    regridded inventory prior from the Jacobian *metadata* alone (no large-array
+    read, no solve), then draws three maps over the core∪buffer window:
+
+    1. prior mean flux density — core cells (inventory density) and buffer
+       super-cells (their area-weighted mean) on one color scale;
+    2. prior 1σ (diagonal) flux density — core ``scalar_stddev × density`` and
+       buffer ``[buffer] stddev × density`` (same moments used to build the block);
+    3. relative prior σ (σ / |mean|) — shows where the prior is loose vs tight and
+       makes the core-vs-buffer freedom obvious at a glance.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    from halo_oe.buffer import build_buffer
+
+    cfg = Config(config_path)
+    if not cfg.get_bool("buffer", "enabled", default=False):
+        print("[buffer] enabled = false — nothing to plot. Enable the buffer first.")
+        return
+    inv = cfg.get("emissions", "inventory", default="pitt")
+    bbox = cfg.get_literal("domain", "bbox", default=None)
+
+    fid, path = flight_paths(cfg, flights)[0]      # geometry only; any flight works
+    jf = JacobianFile(path)
+    grid = jf.grid
+    mask = grid.bbox_mask(*bbox) if bbox is not None else None
+    core = GriddedState(grid, mask, name="core")
+    jf.close()
+
+    buf = build_buffer(grid, core, cfg)
+    if buf is None:
+        print("Buffer is empty for this configuration (check outer_bbox / mode).")
+        return
+    prior = category_priors_on_grid(cfg.get("emissions", "path"), grid, sources=(inv,))[inv]
+
+    scalar_sd = cfg.get_float("prior", "scalar_stddev", default=0.5)
+    buf_sd = cfg.get_float("buffer", "stddev", default=1.0)
+    buf_floor = cfg.get_float("buffer", "stddev_floor", default=0.0)
+    b_mean, b_sigma = buf.prior_moments(prior, buf_sd, buf_floor)
+
+    shape = grid.shape
+    pflat = np.asarray(prior, dtype=float).reshape(shape)
+
+    mean_f = np.full(shape, np.nan); sig_f = np.full(shape, np.nan)
+    mean_f[core.mask] = pflat[core.mask]
+    sig_f[core.mask] = scalar_sd * np.abs(pflat[core.mask])
+    bm = buf.to_field(b_mean); bs = buf.to_field(b_sigma)
+    inbuf = ~np.isnan(bm)
+    mean_f[inbuf] = bm[inbuf]; sig_f[inbuf] = bs[inbuf]
+    denom = np.abs(mean_f)
+    rel_f = np.full(shape, np.nan)
+    ok = denom > 0
+    rel_f[ok] = sig_f[ok] / denom[ok]
+
+    # crop to the core∪buffer window (+margin) so the maps are legible
+    region = core.mask | inbuf
+    ii, jj = np.where(region)
+    m = 3
+    i0, i1 = max(ii.min() - m, 0), min(ii.max() + m + 1, shape[0])
+    j0, j1 = max(jj.min() - m, 0), min(jj.max() + m + 1, shape[1])
+    latc, lonc = grid.lat[i0:i1], grid.lon[j0:j1]
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5.2), constrained_layout=True)
+    panels = [("prior mean flux density", mean_f, "viridis", None),
+              ("prior 1σ (diagonal)", sig_f, "magma", None),
+              ("relative prior σ (σ/|mean|)", rel_f, "cividis", (0, max(scalar_sd, buf_sd) * 1.5))]
+    for ax, (title, fld, cmap, vlim) in zip(axes, panels):
+        sub = fld[i0:i1, j0:j1]
+        kw = {} if vlim is None else {"vmin": vlim[0], "vmax": vlim[1]}
+        pm = ax.pcolormesh(lonc, latc, sub, cmap=cmap, shading="nearest", **kw)
+        fig.colorbar(pm, ax=ax, shrink=0.85)
+        if bbox is not None:
+            ax.add_patch(Rectangle((bbox[2], bbox[0]), bbox[3] - bbox[2], bbox[1] - bbox[0],
+                                   fill=False, ec="red", lw=1.5, label="core"))
+        # buffer super-cell centers (within the window)
+        sel = ((buf.center_lat >= latc[0]) & (buf.center_lat <= latc[-1]) &
+               (buf.center_lon >= lonc[0]) & (buf.center_lon <= lonc[-1]))
+        ax.scatter(buf.center_lon[sel], buf.center_lat[sel], s=4, c="white",
+                   edgecolors="k", linewidths=0.2, alpha=0.6)
+        ax.set_title(title); ax.set_xlabel("lon"); ax.set_ylabel("lat")
+    label = cfg.get("flux", "unit_label", default="prior-units (native)")
+    fig.suptitle(f"Core (red box, {core.n_active} cells) + buffer "
+                 f"({buf.n_super} super-cells, mode={cfg.get('buffer', 'mode', default='coarse')}) "
+                 f"— inventory {inv}  [{label}]")
+
+    run_dir = _run_dir(config_path, cfg)
+    if out_path is None:
+        out = cfg.get("output", "path", default=f"halo_posterior_{inv}.nc")
+        out_path = os.path.splitext(_in_run_dir(run_dir, out))[0] + "_buffer_regions.png"
+    else:
+        out_path = _in_run_dir(run_dir, out_path)
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
+    print(f"Core: {core.n_active} cells;  buffer: {buf.n_super} super-cells over "
+          f"{int((buf.membership >= 0).sum())} native cells.")
+    print(f"Buffer prior mean range [{b_mean.min():.3g}, {b_mean.max():.3g}], "
+          f"σ range [{b_sigma.min():.3g}, {b_sigma.max():.3g}]  (relative σ = {buf_sd:g}).")
+    print(f"Wrote buffer-region map to {out_path}")
 
 
 def main():
@@ -275,9 +405,15 @@ def main():
     p.add_argument("--diagnose-domain", action="store_true",
                    help="Report the fraction of receptor sensitivity outside the core "
                         "mask (whether a buffer region is needed); does not invert.")
+    p.add_argument("--plot-buffer", nargs="?", const=True, default=None, metavar="PNG",
+                   help="Map the core and buffer regions with their prior mean and "
+                        "diagonal σ (prior-only; no solve). Optional output PNG path.")
     args = p.parse_args()
     flights = _split(args.flights) if args.flights else None
-    if args.diagnose_domain:
+    if args.plot_buffer is not None:
+        plot_buffer_regions(args.config, flights=flights,
+                            out_path=None if args.plot_buffer is True else args.plot_buffer)
+    elif args.diagnose_domain:
         diagnose_domain(args.config, flights=flights)
     elif args.compare:
         run_compare(args.config, flights=flights)

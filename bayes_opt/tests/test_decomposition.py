@@ -5,7 +5,7 @@ scalars off), and the solved-category-scalar decomposition (g_k on). All checks
 are synthetic; the key invariant is that per-category totals sum exactly to the
 inventory total in both modes, with prior totals equal to the direct integral.
 
-Run:  python halo_oe/tests/test_decomposition.py  (from bayes_opt/)
+Run:  python tests/test_decomposition.py  (from bayes_opt/)
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import halo_oe  # noqa: F401,E402
 
 from goe import (BlockDiagonalCovariance, DenseOperator, DiagonalCovariance,

@@ -162,25 +162,73 @@ yields a physically defensible sectoral attribution.
 > and from a single flight the information content (DOFS) is ~1–2. Multi-flight
 > data are needed before fine attribution is trustworthy.
 
+### Buffer region (out-of-core emissions)
+
+The receptors are sensitive to emissions **outside** the core mask; the
+`--diagnose-domain` check shows a large fraction of explained enhancement can come
+from beyond the core. If those out-of-core sources have nowhere to go, their signal
+aliases into the core edge cells and the background, biasing the core total. The
+**buffer** (`buffer.py`, `[buffer]`) gives them their own coarse flux degrees of
+freedom: out-of-core native cells are grouped into **super-cells**, each carrying
+one uniform flux unknown whose forward column is the *summed* Jacobian over its
+native cells (built in the same streamed pass as the core operator — see
+`JacobianFile.operator_with_buffer`, no second read).
+
+Two ways to define the super-cells (`[buffer] mode`):
+
+| mode | super-cells from | use for |
+|---|---|---|
+| `coarse` | tile the out-of-core ring by an integer `factor` (or target `resolution_deg`), optionally limited to `outer_bbox` | a generic "coarser resolution outside" |
+| `mask` | an integer **label field** on the grid (`mask_file`, `.npy`/`.nc`); each positive label → one super-cell | arbitrary named buffer blocks / sectors |
+
+The buffer is a **nuisance** state: its prior mean is the area-weighted inventory
+flux density per super-cell (prior std `stddev`, relative to that mean), it absorbs
+out-of-core signal and tightens the core through cross-covariance, but it is
+**excluded from the reported core total**. The buffer block (`buffer`) and its
+super-cell geometry are saved in the bundle for post-hoc inspection
+(`SavedInversion.buffer`). Multi-flight runs stack the buffer operator across
+flights exactly like the core.
+
 ---
 
-## Files
+## Layout
+
+```
+bayes_opt/
+  run_halo.py        # CLI entry point (top level)
+  config.ini         # all settings (see below)
+  halo_oe/           # the Python package (importable modules only)
+  tests/             # synthetic unit tests
+  notebooks/         # walkthrough + bundle-analysis notebooks
+  runs/              # all run_halo.py outputs land here
+```
+
+Run `run_halo.py` from the `bayes_opt/` directory; it adds that directory to the
+path so `import halo_oe` works from any working directory.
+
+### `halo_oe/` modules
 
 | file | role |
 |---|---|
 | `__init__.py` | bootstraps `goe`/`adapters` onto `sys.path` (or use `GOE_INVERSION_PATH`) |
 | `pipeline.py` | `load_context` (per-flight reads, stacked) + `flight_paths` + `invert` (all modes) |
-| `run_halo.py` | CLI: single run, `--compare`, `--inventory`, `--flights`, `--tune`; reads `config.ini` |
 | `background.py` | per-flight lower-envelope planar background (domain-insensitive receptors) |
 | `obs_error.py` | component-wise `R`: measurement ⊕ along-track-correlated model-data mismatch |
 | `emissions.py` | regrid inventory totals / per-sub-category fields onto the Jacobian grid |
 | `groups.py` | configurable keyword grouping of sub-categories into super-categories |
 | `decomposition.py` | the three attribution methods + per-category covariance builder |
+| `buffer.py` | coarse out-of-core buffer super-cells (`coarse` tiling or `mask` label field) |
 | `flux.py` | integrate scalars × prior × cell-area → totals with uncertainty (`linear_estimate`) |
 | `io_bundle.py` | save/reload a complete inversion (prior+posterior, observations, factors) for post-hoc analysis |
-| `config.ini` | all settings (see below) |
-| `halo_inversion_walkthrough.ipynb` | step-by-step notebook (reads the same `config.ini`) |
-| `tests/` | synthetic unit tests (`test_flux`, `test_background`, `test_decomposition`, `test_obs_error`) |
+| `diagnostics.py` | out-of-core sensitivity diagnostic (whether a buffer is needed) |
+
+`run_halo.py` (top level) is the CLI: single run, `--compare`, `--inventory`,
+`--flights`, `--tune`, `--diagnose-domain`, `--plot-buffer`. `notebooks/` holds
+`halo_inversion_walkthrough.ipynb` (step-by-step, reads the same `config.ini`) and
+`saved_bundle_analysis.ipynb` (post-hoc bundle reader). `tests/` holds the
+synthetic unit tests (`test_flux`, `test_background`, `test_decomposition`,
+`test_obs_error`, `test_multiflight`, `test_buffer`, `test_buffer_pipeline`,
+`test_io_bundle`, `test_diagnostics`).
 
 ---
 
@@ -200,13 +248,16 @@ stays in sync with the CLI. Sections:
   fallback `baseline`; for components: `measurement_stddev`, `mdm_stddev`,
   `mdm_correlation_length_km`
 - `[offset]` — `n_groups`, `stddev` (per-flight background offset block)
+- `[buffer]` — `enabled`, `mode` (coarse|mask); coarse: `factor` or `resolution_deg`,
+  `outer_bbox`; mask: `mask_file`; `stddev`, `stddev_floor` (out-of-core buffer region)
 - `[decomposition]` — `enabled`, `method` (partition|category_fields|category_scalars)
 - `[category_groups]` — `group = keyword, keyword, …` (sub-category → super-category)
 - `[category_uncertainty]` — `default` + per-group relative σ
 - `[category_spatial]` — per-group decorrelation length km; `0` = diagonal (point source)
 - `[tuning]` — `tune_R`, `tune_Sa` (used by `run_halo.py --tune`)
 - `[flux]` — `unit_scale`, `unit_label`
-- `[output]` — `path`
+- `[output]` — `dir` (where all outputs go; default `runs`, relative to the config
+  file), `path` (posterior base filename), optional `bundle_dir`
 
 Paths in `config.ini` are relative to the file's own directory. Inline `#`/`;`
 comments after a value are supported (handled by `goe.config.Config`).
@@ -215,26 +266,40 @@ comments after a value are supported (handled by `goe.config.Config`).
 
 ## Usage
 
-Run from the `bayes_opt/` directory (so `python -m halo_oe.*` resolves), or add it
-to `PYTHONPATH`.
+Run from the `bayes_opt/` directory (`run_halo.py` puts itself on the path so the
+`halo_oe` package imports regardless of the working directory).
 
 ```bash
 # single inversion with the primary inventory (config [emissions] inventory)
-python -m halo_oe.run_halo halo_oe/config.ini
+python run_halo.py config.ini
 
 # override the inventory
-python -m halo_oe.run_halo halo_oe/config.ini --inventory epa
+python run_halo.py config.ini --inventory epa
 
 # compare all three inventories as alternative priors (one Jacobian read)
-python -m halo_oe.run_halo halo_oe/config.ini --compare
+python run_halo.py config.ini --compare
 
 # report model-data-mismatch diagnostics + max-likelihood error scales (non-destructive)
-python -m halo_oe.run_halo halo_oe/config.ini --tune
+python run_halo.py config.ini --tune
 
 # assimilate specific flights (single day, or any combination) for experiments
-python -m halo_oe.run_halo halo_oe/config.ini --flights 20230726_1
-python -m halo_oe.run_halo halo_oe/config.ini --flights 20230726_1,20230726_2,20230728_1
+python run_halo.py config.ini --flights 20230726_1
+python run_halo.py config.ini --flights 20230726_1,20230726_2,20230728_1
+
+# is a buffer needed? fraction of receptor sensitivity outside the core (no solve)
+python run_halo.py config.ini --diagnose-domain
+
+# map the core + buffer regions with their prior mean and diagonal σ (no solve)
+python run_halo.py config.ini --plot-buffer            # PNG next to [output] path
+python run_halo.py config.ini --plot-buffer regions.png
 ```
+
+The `--plot-buffer` map is a prior-only check (built from Jacobian metadata, no
+large-array read): three panels over the core∪buffer window — prior mean flux
+density, prior 1σ (diagonal), and relative σ (σ/|mean|) — with the core mask drawn
+as a red box and buffer super-cell centers marked. Use it to sanity-check the
+super-cell layout (`coarse` tiling or `mask` labels), the `outer_bbox` extent, and
+how loose the buffer prior is relative to the core.
 
 Decomposition is enabled via config (`[decomposition] enabled = true` and
 `method = …`), not a flag. Output is a netCDF with posterior scalar fields, their
@@ -247,7 +312,7 @@ import halo_oe                       # wires goe + adapters onto the path
 from goe.config import Config
 from halo_oe.pipeline import load_context, invert
 
-cfg = Config("halo_oe/config.ini")
+cfg = Config("config.ini")
 # one or more flights (shared flux state); reads each Jacobian once
 ctx = load_context(cfg, inventories=["pitt"], flights=["20230726_1", "20230726_2"])
 res = invert(ctx, "pitt", decompose=True, method="category_fields")
@@ -264,7 +329,7 @@ solved inversion can be saved and reused without the forward operator. Run once
 with `--save` (or `[output] bundle_dir`):
 
 ```bash
-python -m halo_oe.run_halo halo_oe/config.ini --flights 20230726_1,20230726_2 --save runs/jul26_both
+python run_halo.py config.ini --flights 20230726_1,20230726_2 --save jul26_both
 ```
 
 This writes a directory bundle: `factors.npz` (posterior mean + the covariance
@@ -339,11 +404,11 @@ So steps 1–10 are faithful to the config; 8b/8c/12 are teaching overrides. Edi
 Synthetic, self-contained (no large files needed). Run any file directly:
 
 ```bash
-python halo_oe/tests/test_flux.py
-python halo_oe/tests/test_background.py
-python halo_oe/tests/test_decomposition.py
-python halo_oe/tests/test_obs_error.py
-python halo_oe/tests/test_multiflight.py
+python tests/test_flux.py
+python tests/test_background.py
+python tests/test_decomposition.py
+python tests/test_obs_error.py
+python tests/test_multiflight.py
 ```
 
 Key invariants checked: the background fit recovers a plane under a synthetic

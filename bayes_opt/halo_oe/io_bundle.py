@@ -47,9 +47,12 @@ from .groups import keyword_map_from_config
 __all__ = ["save_inversion", "load_inversion", "SavedInversion"]
 
 
+_NON_GRIDDED = ("bc", "buffer")
+
+
 def _gridded_block_names(state):
-    """Block names that live on the grid (everything except the offset block)."""
-    return [b.name for b in state.blocks if b.name != "bc"]
+    """Block names that live on the core grid (excluding offset and buffer blocks)."""
+    return [b.name for b in state.blocks if b.name not in _NON_GRIDDED]
 
 
 def save_inversion(dirpath: str, ctx, res) -> str:
@@ -61,8 +64,7 @@ def save_inversion(dirpath: str, ctx, res) -> str:
 
     # --- posterior factors + prior mean -> factors.npz -------------------
     structure, arrays = posterior_to_flat(post)
-    xa = state.fill(0.0, **{b.name: (0.0 if b.name == "bc" else 1.0) for b in state.blocks})
-    arrays = dict(arrays); arrays["xa"] = xa
+    arrays = dict(arrays); arrays["xa"] = res.problem.xa   # exact prior mean (all blocks)
     np.savez(os.path.join(dirpath, "factors.npz"), **arrays)
 
     # inventory super-category prior fields, restricted to active cells (compact;
@@ -88,6 +90,19 @@ def save_inversion(dirpath: str, ctx, res) -> str:
             ds.createDimension("bc", state.block("bc").size)
             ds.createVariable("bc", "f8", ("bc",))[:] = parts["bc"]
             ds.createVariable("bc_stddev", "f8", ("bc",))[:] = stds["bc"]
+
+        if "buffer" in state.names and ctx.buffer is not None:
+            buf = ctx.buffer
+            parts, stds = state.unpack(post.mean), state.unpack(post.stddev())
+            ds.createDimension("super", buf.n_super)
+            ds.createVariable("buffer", "f8", ("super",))[:] = parts["buffer"]
+            ds.createVariable("buffer_stddev", "f8", ("super",))[:] = stds["buffer"]
+            ds.createVariable("buffer_center_lat", "f8", ("super",))[:] = buf.center_lat
+            ds.createVariable("buffer_center_lon", "f8", ("super",))[:] = buf.center_lon
+            ds.createVariable("buffer_area", "f8", ("super",))[:] = buf.area
+            ds.createVariable("buffer_cell_count", "i8", ("super",))[:] = buf.cell_count
+            ds.createVariable("buffer_membership", "i8", ("lat", "lon"))[:] = \
+                buf.membership.reshape(grid.shape)
 
         # per-receptor (all flights concatenated, in observation order)
         n = sum(jf.n_receptors for jf in ctx.jfs)
@@ -156,6 +171,7 @@ class SavedInversion:
     receptors: dict
     report: dict
     diagnostics: dict
+    buffer: dict | None = None  # super-cell geometry/posterior, or None if no buffer
 
     def estimate(self, A):
         """Mean and covariance of linear functionals ``A`` of the posterior.
@@ -199,6 +215,10 @@ def load_inversion(dirpath: str) -> SavedInversion:
         rec_vars = [v for v in ds.variables
                     if v.startswith("receptor") or v in ("enhancement", "modeled", "outlier_flag")]
         receptors = {v: np.asarray(ds[v][:]) for v in rec_vars}
+        buffer = None
+        if "buffer" in ds.variables:
+            buffer = {v[len("buffer_"):] if v != "buffer" else "value": np.asarray(ds[v][:])
+                      for v in ds.variables if v == "buffer" or v.startswith("buffer_")}
 
     with open(os.path.join(dirpath, "report.json")) as f:
         report = json.load(f)
@@ -207,4 +227,5 @@ def load_inversion(dirpath: str) -> SavedInversion:
     return SavedInversion(
         inventory=layout["inventory"], mode=layout["mode"], flight_ids=layout["flight_ids"],
         state=state, core=core, grid=grid, posterior=posterior, xa=arrays["xa"],
-        group_fields=group_fields, receptors=receptors, report=report, diagnostics=diagnostics)
+        group_fields=group_fields, receptors=receptors, report=report, diagnostics=diagnostics,
+        buffer=buffer)
