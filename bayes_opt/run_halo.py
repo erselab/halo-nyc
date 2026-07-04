@@ -129,7 +129,7 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False,
         flights=None, save=None, overrides=None) -> str:
     """Run a single inversion with the primary (or overridden) inventory."""
     cfg = _load_cfg(config_path, overrides)
-    inv = inventory or cfg.get("emissions", "inventory", default="pitt")
+    inv = inventory or cfg.get("emissions", "inventory", default="m3t")
 
     decompose = cfg.get_bool("decomposition", "enabled", default=False)
     method = cfg.get("decomposition", "method", default="partition")

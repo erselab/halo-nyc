@@ -22,10 +22,9 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator
-
 from adapters.gridded_state import Grid
-
+from scipy.interpolate import RegularGridInterpolator
+import pdb
 from .groups import DEFAULT_KEYWORD_MAP, group_indices
 
 __all__ = ["DEFAULT_SOURCES", "load_source_totals", "regrid_to_grid",
@@ -98,11 +97,15 @@ def load_subcategory_fields(emissions_h5: str, inventory: str):
     n_lon)`` and ``labels`` is the list of sub-category names from the file
     attribute ``<inventory>_categories``.
     """
+    
     with h5py.File(emissions_h5, "r") as f:
         lat = np.asarray(f["lat"][:], dtype=float)
         lon = np.asarray(f["lon"][:], dtype=float)
         arr = np.asarray(f[inventory][:], dtype=float)
-        labels = [s.strip() for s in f.attrs[f"{inventory}_categories"].split(";")]
+        categories = f.attrs[f"{inventory}_categories"]
+        if isinstance(categories, bytes):
+            categories = categories.decode("utf-8")
+        labels = [s.strip() for s in categories.split(";")]
     if arr.ndim != 3 or arr.shape[0] != len(labels):
         raise ValueError(
             f"inventory {inventory!r}: array shape {arr.shape} inconsistent with "
