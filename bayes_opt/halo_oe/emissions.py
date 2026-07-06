@@ -24,7 +24,6 @@ import h5py
 import numpy as np
 from adapters.gridded_state import Grid
 from scipy.interpolate import RegularGridInterpolator
-import pdb
 from .groups import DEFAULT_KEYWORD_MAP, group_indices
 
 __all__ = ["DEFAULT_SOURCES", "load_source_totals", "regrid_to_grid",
@@ -32,6 +31,24 @@ __all__ = ["DEFAULT_SOURCES", "load_source_totals", "regrid_to_grid",
            "group_priors_on_grid"]
 
 DEFAULT_SOURCES = ("edgar", "epa", "pitt")
+
+
+def _fill_masked(dset) -> np.ndarray:
+    """Read an h5py dataset as float, zeroing any CF ``_FillValue`` cells.
+
+    Some inventories (e.g. netCDF sources merged with ``ncecat``) carry a
+    per-variable ``_FillValue`` attribute for cells outside that layer's native
+    coverage (e.g. a wetlands layer with no data far from wetlands). h5py does
+    not apply CF masking on its own, so an unmasked fill value (typically a
+    large-magnitude sentinel like ``-9999``) would otherwise dominate any sum
+    across sub-categories. Treating "no data for this layer here" as zero
+    emission from that layer is the correct interpretation for a total field.
+    """
+    arr = np.asarray(dset[:], dtype=float)
+    fill = dset.attrs.get("_FillValue")
+    if fill is not None:
+        arr = np.where(arr == float(np.asarray(fill).item()), 0.0, arr)
+    return arr
 
 
 def load_source_totals(
@@ -47,7 +64,7 @@ def load_source_totals(
         lat = np.asarray(f["lat"][:], dtype=float)
         lon = np.asarray(f["lon"][:], dtype=float)
         for s in sources:
-            arr = np.asarray(f[s][:], dtype=float)
+            arr = _fill_masked(f[s])
             totals[s] = arr.sum(axis=0) if arr.ndim == 3 else arr
     return totals, lat, lon
 
@@ -101,7 +118,7 @@ def load_subcategory_fields(emissions_h5: str, inventory: str):
     with h5py.File(emissions_h5, "r") as f:
         lat = np.asarray(f["lat"][:], dtype=float)
         lon = np.asarray(f["lon"][:], dtype=float)
-        arr = np.asarray(f[inventory][:], dtype=float)
+        arr = _fill_masked(f[inventory])
         categories = f.attrs[f"{inventory}_categories"]
         if isinstance(categories, bytes):
             categories = categories.decode("utf-8")
