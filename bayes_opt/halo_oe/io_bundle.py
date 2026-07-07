@@ -17,7 +17,7 @@ Bundle layout (a directory):
 * ``fields.nc`` — geometry (grid, mask), per-block posterior fields + stddev +
   prior fields mapped onto the grid, the inventory's super-category prior fields
   (for re-grouping), and per-receptor observations / background / enhancement /
-  modeled value / flight / outlier flag.
+  modeled value (H x̂) / prior-modeled value (H xa) / flight / outlier flag.
 * ``layout.json`` — state-block layout, posterior factor structure, inventory,
   mode, flight ids, bbox.
 * ``report.json`` — the flux report and diagnostics.
@@ -121,6 +121,11 @@ def save_inversion(dirpath: str, ctx, res) -> str:
         kept = ~res.outlier_mask if res.outlier_mask is not None else np.ones(n, bool)
         modeled[kept] = res.problem.H.matvec(post.mean)
         ds.createVariable("modeled", "f8", ("receptor",))[:] = modeled
+        # prior-modeled enhancement H·xa; the innovation z − H·xa is independent of R
+        # (unlike z − H x̂), so it can diagnose the error model without circularity.
+        prior_modeled = np.full(n, np.nan)
+        prior_modeled[kept] = res.problem.H.matvec(res.problem.xa)
+        ds.createVariable("prior_modeled", "f8", ("receptor",))[:] = prior_modeled
         if res.outlier_mask is not None:
             ds.createVariable("outlier_flag", "i1", ("receptor",))[:] = res.outlier_mask.astype("i1")
 
@@ -213,7 +218,8 @@ def load_inversion(dirpath: str) -> SavedInversion:
         group_fields = {v[len("groupprior_"):]: np.asarray(ds[v][:])
                         for v in ds.variables if v.startswith("groupprior_")}
         rec_vars = [v for v in ds.variables
-                    if v.startswith("receptor") or v in ("enhancement", "modeled", "outlier_flag")]
+                    if v.startswith("receptor")
+                    or v in ("enhancement", "modeled", "prior_modeled", "outlier_flag")]
         receptors = {v: np.asarray(ds[v][:]) for v in rec_vars}
         buffer = None
         if "buffer" in ds.variables:

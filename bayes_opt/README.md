@@ -64,7 +64,7 @@ nyc_ch4_emissions.h5 ─► emissions.py  ─► prior field(s) regridded onto J
 ```
 
 The expensive Jacobian read is done **once** per run (`pipeline.load_context`) and
-reused — including across the three inventories in `--compare` mode.
+reused across all of that run's solves.
 
 For **multiple flights** the flux state is shared and each flight contributes its
 own block of observation rows (`goe.BlockRow`), its own background, error
@@ -80,8 +80,8 @@ in the config (`[jacobian] flights`) or at the CLI (`--flights`); see below.
 `nyc_ch4_emissions.h5` holds **three independent inventories** — `edgar`, `epa`,
 `pitt` (Pittsburgh) — each a *complete* estimate of the same NYC emissions with
 its own sub-category breakdown. **They are never summed.** A single inversion uses
-one as the prior (`[emissions] inventory`); `--compare` inverts each separately
-and tabulates the posteriors to show how prior-dependent the answer is.
+one as the prior (`[emissions] inventory`); to gauge how prior-dependent the answer
+is, run separate inversions with `--inventory` set to each and compare the posteriors.
 
 ### Multiple flights (shared flux, stacked observations)
 
@@ -236,8 +236,8 @@ path so `import halo_oe` works from any working directory.
 | `io_bundle.py` | save/reload a complete inversion (prior+posterior, observations, factors) for post-hoc analysis |
 | `diagnostics.py` | out-of-core sensitivity (whether a buffer is needed) + core-sizing (how big the core should be) |
 
-`run_halo.py` (top level) is the CLI: single run, `--compare`, `--inventory`,
-`--flights`, `--tune`, `--diagnose-domain`, `--size-core`, `--plot-buffer`.
+`run_halo.py` (top level) is the CLI: single run, `--inventory`,
+`--flights`, `--tune`, `--diagnose-domain`, `--size-core`.
 `notebooks/` holds
 `halo_inversion_walkthrough.ipynb` (step-by-step, reads the same `config.ini`) and
 `saved_bundle_analysis.ipynb` (post-hoc bundle reader). `tests/` holds the
@@ -255,7 +255,7 @@ stays in sync with the CLI. Sections:
 - `[jacobian]` — `dir` + `flights` (comma-separated flight ids, assimilated jointly;
   overridable with `--flights`), or a single `path` (back-compat); `in_memory`, `row_chunk`
 - `[domain]` — `bbox = [lat_min, lat_max, lon_min, lon_max]` (the NYC core mask)
-- `[emissions]` — `path`, `inventory` (primary prior), `compare` (list for `--compare`)
+- `[emissions]` — `path`, `inventory` (primary prior)
 - `[background]` — `method` (planar|constant), `degree`, `envelope_quantile`, `n_iter`,
   `domain_sensitivity_quantile` (restrict the fit to domain-insensitive receptors; 1.0 = off)
 - `[prior]` — `scalar_stddev`, `correlation_length_km` (per-cell total field)
@@ -289,11 +289,8 @@ Run from the `bayes_opt/` directory (`run_halo.py` puts itself on the path so th
 # single inversion with the primary inventory (config [emissions] inventory)
 python run_halo.py config.ini
 
-# override the inventory
+# override the inventory (run once per inventory to compare prior-dependence)
 python run_halo.py config.ini --inventory epa
-
-# compare all three inventories as alternative priors (one Jacobian read)
-python run_halo.py config.ini --compare
 
 # report model-data-mismatch diagnostics + max-likelihood error scales (non-destructive)
 python run_halo.py config.ini --tune
@@ -308,10 +305,6 @@ python run_halo.py config.ini --diagnose-domain
 # how big should the core be? suggest bboxes from where the data constrain flux (no solve)
 python run_halo.py config.ini --size-core
 
-# map the core + buffer regions with their prior mean and diagonal σ (no solve)
-python run_halo.py config.ini --plot-buffer            # PNG in [output] dir (runs/)
-python run_halo.py config.ini --plot-buffer regions.png
-
 # override any config value without editing the file (repeatable)
 python run_halo.py config.ini --set buffer.enabled=true --set buffer.resolution_deg=0.1
 python run_halo.py config.ini --set prior.scalar_stddev=0.3 --set domain.bbox="[40.5,41.0,-74.2,-73.6]"
@@ -319,17 +312,10 @@ python run_halo.py config.ini --set prior.scalar_stddev=0.3 --set domain.bbox="[
 
 `--set SECTION.KEY=VALUE` overrides a single config entry in memory for that run
 only (the file is untouched); repeat it for several overrides, and combine it with
-any mode (`--compare`, `--plot-buffer`, …). The section is everything before the
-last dot, so `--set category_groups.natural_gas="ng_, natural gas"` targets the
+any mode (`--size-core`, `--diagnose-domain`, …). The section is everything before
+the last dot, so `--set category_groups.natural_gas="ng_, natural gas"` targets the
 `natural_gas` key. Overrides are applied before anything else, so a saved bundle's
 `config.ini` records the *effective* settings. Missing sections/keys are created.
-
-The `--plot-buffer` map is a prior-only check (built from Jacobian metadata, no
-large-array read): three panels over the core∪buffer window — prior mean flux
-density, prior 1σ (diagonal), and relative σ (σ/|mean|) — with the core mask drawn
-as a red box and buffer super-cell centers marked. Use it to sanity-check the
-super-cell layout (`coarse` tiling or `mask` labels), the `outer_bbox` extent, and
-how loose the buffer prior is relative to the core.
 
 Decomposition is enabled via config (`[decomposition] enabled = true` and
 `method = …`), not a flag. Output is `posterior.nc` (in the run directory) with
