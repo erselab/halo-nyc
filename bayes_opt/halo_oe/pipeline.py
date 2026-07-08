@@ -227,7 +227,14 @@ def _buffer_pieces(ctx, inventory):
 def _finalize(problem, posterior, n_outliers=0):
     diagnostics = {"reduced_chi_square": reduced_chi_square(problem, posterior),
                    "n_obs_used": problem.n_obs, "n_outliers": n_outliers}
-    if problem.n_state <= 2000:
+    # degrees_of_freedom is O(n_obs^2) whenever the observation-space strategy
+    # was used (goe.diagnostics routes through the n_obs-sized tr(A) = n_obs -
+    # tr(R G^-1) identity in that case) -- true for every real HALO problem,
+    # since n_obs (receptors) is always far smaller than n_state (grid cells x
+    # categories). The size guard below only matters for the state-space
+    # fallback (chosen only when n_state <= n_obs, so already small), where the
+    # direct O(n_state^2) averaging kernel is used instead.
+    if posterior.strategy == "observation" or problem.n_state <= 2000:
         diagnostics["degrees_of_freedom"] = degrees_of_freedom(problem, posterior)
     return diagnostics
 

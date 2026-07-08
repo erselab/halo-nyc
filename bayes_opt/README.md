@@ -94,6 +94,16 @@ the lever that raises information content: degrees-of-freedom-for-signal is ~1�
 per flight, so combining flights is what makes the flux (and the `R`/`Sa` error
 split) identifiable.
 
+This number is reported, not just estimated: `res.diagnostics['degrees_of_freedom']`
+is printed by every `run_halo.py` run and saved in `--save`d bundles' `diagnostics`
+dict (via `goe.diagnostics.degrees_of_freedom`). It's cheap regardless of how
+large the state is (a per-cell field, times one per category under
+`category_fields` decomposition, can be hundreds of thousands of unknowns) —
+`goe` computes it through an `n_obs × n_obs` identity rather than the full
+`n_state × n_state` averaging kernel whenever the observation-space solve was
+used, which is always the case here since `n_obs` (receptors) is far smaller
+than `n_state`.
+
 Flights are selected by id (the Jacobian file stem, e.g. `20230726_1`) via
 `[jacobian] flights`, the `--flights` CLI override, or `load_context(cfg, ...,
 flights=[...])` — so single days and arbitrary combinations are easy to run for
