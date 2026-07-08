@@ -10,6 +10,7 @@ flight_data/
 # Saved inversion bundles (save_inversion output dirs)
 *_bundle/
 runs/
+config.ini
 
 # Python / OS junk
 __pycache__/
@@ -17,3 +18,5 @@ __pycache__/
 .DS_Store
 .ipynb_checkpoints/
 config.ini
+error.*
+output.*

@@ -368,8 +368,5 @@ def main():
             run_dir = os.path.dirname(out_path)   # the resolved <base>/<save> directory
             plot_posterior(load_inversion(run_dir), out_path=run_dir)
             plot_residuals(run_dir, out_path=run_dir)
-
-
-
 if __name__ == "__main__":
     main()
