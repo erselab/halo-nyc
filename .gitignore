@@ -6,6 +6,7 @@ flight_data/
 *.nc4
 *.npy
 *.npz
+*_save.py
 # Saved inversion bundles (save_inversion output dirs)
 *_bundle/
 runs/
@@ -15,3 +16,4 @@ __pycache__/
 *.pyc
 .DS_Store
 .ipynb_checkpoints/
+config.ini
