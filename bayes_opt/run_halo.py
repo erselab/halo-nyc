@@ -36,7 +36,9 @@ from halo_oe.diagnostics import out_of_core_sensitivity, summarize_out_of_core  
 from halo_oe.emissions import category_priors_on_grid  # noqa: E402
 from halo_oe.io_bundle import load_inversion, save_inversion  # noqa: E402
 from halo_oe.pipeline import flight_paths, invert, load_context  # noqa: E402
-from halo_oe.plotting import plot_posterior, plot_residuals  # noqa: E402
+from halo_oe.plotting import (  # noqa: E402
+    plot_background, plot_flux_summary, plot_posterior, plot_residuals,
+)
 
 
 def _split(s):
@@ -56,6 +58,41 @@ def _effective_save(cfg, save=None):
     ``_run_dir`` treats as "write directly into ``[output] dir``".
     """
     return (save or cfg.get("output", "save", default=None)) or None
+
+
+_PLOT_FUNCS = {
+    "posterior": lambda run_dir: plot_posterior(load_inversion(run_dir), out_path=run_dir),
+    "residuals": lambda run_dir: plot_residuals(run_dir, out_path=run_dir),
+    "background": lambda run_dir: plot_background(run_dir, out_path=run_dir),
+    "flux_summary": lambda run_dir: plot_flux_summary(run_dir, out_path=run_dir),
+}
+
+
+def _effective_plot_types(cfg, plot_diagnostics: bool = False) -> list[str]:
+    """Resolve which diagnostic plots (see :mod:`halo_oe.plotting`) to generate.
+
+    ``--plot-diagnostics`` on the CLI is an override that forces every known
+    plot type on (same precedence as ``--save`` over ``[output] save``, see
+    :func:`_effective_save`); otherwise plotting is config-driven via
+    ``[plotting] enabled`` + ``[plotting] types``. Returns an empty list when
+    plotting is off.
+    """
+    if plot_diagnostics:
+        return list(_PLOT_FUNCS)
+    if not cfg.get_bool("plotting", "enabled", default=False):
+        return []
+    return _split(cfg.get("plotting", "types", default=",".join(_PLOT_FUNCS)))
+
+
+def _dispatch_plots(plot_types, run_dir: str) -> None:
+    """Run each resolved plot type (see :func:`_effective_plot_types`) against a bundle."""
+    for t in plot_types:
+        fn = _PLOT_FUNCS.get(t)
+        if fn is None:
+            print(f"  (skipping unknown [plotting] type {t!r}; known: {', '.join(_PLOT_FUNCS)})")
+            continue
+        print(f"  plotting: {t}")
+        fn(run_dir)
 
 
 def _run_dir(config_path: str, cfg, save=None) -> str:
@@ -133,10 +170,11 @@ def _report_tuning(cfg, res):
 
 
 def run(config_path: str, inventory: str | None = None, tune: bool = False,
-        flights=None, save=None, overrides=None) -> str:
+        flights=None, save=None, overrides=None, plot_diagnostics: bool = False) -> str:
     """Run a single inversion with the primary (or overridden) inventory."""
     cfg = _load_cfg(config_path, overrides)
     save = _effective_save(cfg, save)
+    plot_types = _effective_plot_types(cfg, plot_diagnostics)
     inv = inventory or cfg.get("emissions", "inventory", default="m3t")
 
     decompose = cfg.get_bool("decomposition", "enabled", default=False)
@@ -182,13 +220,39 @@ def run(config_path: str, inventory: str | None = None, tune: bool = False,
         print(f"  flagged {int(res.diagnostics['n_outliers'])} outlier receptors "
               f"(saved as 'outlier_flag')")
 
-    if save:   # --save also drops a reusable bundle alongside posterior.nc
+    if save or plot_types:   # --save (or any diagnostic plot) drops a reusable bundle too
         save_inversion(run_dir, ctx, res)
         print(f"Saved reusable inversion bundle to {run_dir}/  "
               f"(reload with halo_oe.io_bundle.load_inversion)")
     for jf in ctx.jfs:
         jf.close()
+
+    _dispatch_plots(plot_types, run_dir)
     return out_path
+
+
+def plot_only(bundle_dir: str, overrides=None, plot_diagnostics: bool = False) -> None:
+    """(Re)generate diagnostic plots from an existing saved bundle, no re-solve.
+
+    ``bundle_dir`` must hold a bundle written by :func:`halo_oe.io_bundle.save_inversion`
+    (a prior ``--save`` run, or any run with ``[plotting] enabled``) — it carries its own
+    ``config.ini`` (the config used to produce it), which supplies ``[plotting]``
+    ``enabled``/``types`` (and anything ``--set`` overrides here). Skips
+    ``load_context``/``invert`` entirely — the expensive Jacobian load and solve — since
+    everything the plots need is already in the bundle.
+    """
+    cfg_path = os.path.join(bundle_dir, "config.ini")
+    if not os.path.exists(cfg_path):
+        raise FileNotFoundError(
+            f"{cfg_path} not found — --plot-only expects a bundle directory written by "
+            "save_inversion (a prior --save run, or a run with [plotting] enabled)")
+    cfg = _load_cfg(cfg_path, overrides)
+    plot_types = _effective_plot_types(cfg, plot_diagnostics)
+    if not plot_types:
+        print("no plots requested: enable [plotting] in the bundle's config.ini, "
+              "or pass --plot-diagnostics to force every type on")
+        return
+    _dispatch_plots(plot_types, bundle_dir)
 
 
 def diagnose_domain(config_path: str, flights=None, overrides=None, save=None) -> None:
@@ -326,7 +390,9 @@ def size_core(config_path: str, flights=None, overrides=None, save=None,
 
 def main():
     p = argparse.ArgumentParser(description="Run the HALO CH4 flux inversion.")
-    p.add_argument("config", help="Path to the HALO inversion config (INI) file.")
+    p.add_argument("config", nargs="?", default=None,
+                   help="Path to the HALO inversion config (INI) file. Not needed with "
+                        "--plot-only (the bundle's own saved config.ini is used instead).")
     p.add_argument("--inventory", default=None,
                    help="Override the primary inventory (e.g. edgar, epa, pitt).")
     p.add_argument("--tune", action="store_true",
@@ -348,8 +414,20 @@ def main():
     p.add_argument("--size-core", action="store_true",
                    help="Suggest core bounding boxes from where the data constrain flux "
                         "(emission-weighted sensitivity); does not invert.")
-    p.add_argument("--plot-diagnostics", default=False, metavar="PNG",
-                   help="Plot the posterior fields and observation fitting diagnostics.")
+    p.add_argument("--plot-diagnostics", action="store_true",
+                   help="Force every diagnostic plot on (posterior fields, per-flight "
+                        "residual/mismatch diagnostics, the fitted background surface, and "
+                        "the prior/posterior flux summary; PNGs written to the run "
+                        "directory), overriding [plotting] in the config. Without this flag, "
+                        "plotting is controlled by [plotting] enabled/types in the config. "
+                        "Either path saves a reusable bundle even without --save.")
+    p.add_argument("--plot-only", default=None, metavar="DIR",
+                   help="Skip the inversion entirely and (re)generate diagnostic plots from "
+                        "an existing saved bundle at DIR (written by a prior --save or a "
+                        "[plotting]-enabled run). Reads [plotting] from DIR/config.ini (the "
+                        "bundle's own saved config); --plot-diagnostics forces every plot "
+                        "type on, --set still applies overrides. No 'config' positional "
+                        "argument is needed with this flag.")
     p.add_argument("--set", dest="overrides", action="append", default=[],
                    metavar="SECTION.KEY=VALUE",
                    help="Override a config value without editing the file; repeatable. "
@@ -357,16 +435,18 @@ def main():
     args = p.parse_args()
     flights = _split(args.flights) if args.flights else None
     ov = args.overrides
+    if args.plot_only:
+        plot_only(args.plot_only, overrides=ov, plot_diagnostics=args.plot_diagnostics)
+        return
+    if args.config is None:
+        p.error("the following arguments are required: config (unless --plot-only is given)")
     if args.diagnose_domain:
         diagnose_domain(args.config, flights=flights, overrides=ov, save=args.save)
     elif args.size_core:
         size_core(args.config, flights=flights, overrides=ov, save=args.save)
     else:
-        out_path = run(args.config, inventory=args.inventory, tune=args.tune,
-                       flights=flights, save=args.save, overrides=ov)
-        if args.plot_diagnostics:
-            run_dir = os.path.dirname(out_path)   # the resolved <base>/<save> directory
-            plot_posterior(load_inversion(run_dir), out_path=run_dir)
-            plot_residuals(run_dir, out_path=run_dir)
+        run(args.config, inventory=args.inventory, tune=args.tune,
+            flights=flights, save=args.save, overrides=ov,
+            plot_diagnostics=args.plot_diagnostics)
 if __name__ == "__main__":
     main()

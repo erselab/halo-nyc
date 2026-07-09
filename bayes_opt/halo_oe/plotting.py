@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Rectangle
 
-from .flux import cell_areas_m2
 from .io_bundle import load_inversion
 
 
@@ -165,73 +164,250 @@ def plot_buffer_regions(bundle_dir: str, out_path: str | None = None) -> None:
     else:
         plt.show()
 
+def _flights_present(flight_ids, flight_index):
+    """(fid, boolean selection mask) for each flight id that has receptors."""
+    return [(fid, flight_index == f) for f, fid in enumerate(flight_ids) if (flight_index == f).any()]
+
+
+def _residual_map_row(ax_row, fid, rlat, rlon, z, modeled, resid, flag, show_titles) -> None:
+    """One flight's spatial maps (enhancement / modeled / residual) into a row of axes."""
+    for a, (title, val, cmap) in zip(ax_row, [('enhancement z', z, 'viridis'),
+            ('modeled  Hx\u0302', modeled, 'viridis'), ('residual  z - Hx\u0302', resid, 'RdBu_r')]):
+        vlim = np.nanmax(np.abs(resid)) if cmap == 'RdBu_r' else None
+        kw = dict(vmin=-vlim, vmax=vlim) if vlim else {}
+        s = a.scatter(rlon, rlat, c=val, s=18, cmap=cmap, **kw)
+        if flag.any():
+            a.scatter(rlon[flag], rlat[flag], s=70, facecolors='none', edgecolors='k', label='outlier')
+            a.legend(loc='upper left', fontsize=7)
+        if show_titles:
+            a.set_title(title)
+        a.set_xlabel('lon'); a.figure.colorbar(s, ax=a, shrink=0.85)
+    ax_row[0].set_ylabel(f'flight {fid}\nlat')
+
+
+def _mismatch_diagnostics_row(ax_row, fid, modeled, resid, fin, show_titles) -> None:
+    """One flight's normalized-residual histogram, residual-vs-modeled, and
+    along-track autocorrelation into a row of axes (mirrors the notebook's
+    mismatch section)."""
+    med = np.median(resid[fin])
+    sigma_mad = 1.4826 * np.median(np.abs(resid[fin] - med))
+    nresid = (resid - med) / sigma_mad
+    print(f'  flight {fid:<14} n={fin.sum():4d}  bias {np.mean(resid[fin]):+.4f}  '
+          f'rms {np.sqrt(np.mean(resid[fin]**2)):.4f} ppm  robust sigma(MAD) {sigma_mad:.4f} ppm')
+
+    # (a) normalized-residual histogram vs N(0,1)
+    ax_row[0].hist(nresid[fin], bins=30, density=True, alpha=0.7)
+    xx = np.linspace(-4, 4, 100)
+    ax_row[0].plot(xx, np.exp(-xx**2 / 2) / np.sqrt(2 * np.pi), 'k--', label='N(0,1)')
+    ax_row[0].set_xlabel('residual / sigma_MAD'); ax_row[0].set_ylabel(f'flight {fid}\ndensity')
+    if show_titles:
+        ax_row[0].set_title('normalized residual')
+    ax_row[0].legend(fontsize=7)
+    # (b) residual vs modeled (bias / heteroscedasticity)
+    ax_row[1].scatter(modeled[fin], resid[fin], s=12, alpha=0.6); ax_row[1].axhline(0, color='k', lw=1)
+    ax_row[1].set_xlabel('modeled enhancement (ppm)'); ax_row[1].set_ylabel('residual (ppm)')
+    if show_titles:
+        ax_row[1].set_title('residual vs modeled')
+    # (c) along-track autocorrelation (index order ~ track) within this flight
+    r = resid[fin]
+    r = (r - r.mean()) / (r.std() + 1e-12)
+    maxlag = min(40, max(2, r.size - 1))
+    ac = np.array([1.0 if k == 0 else float(np.mean(r[:-k] * r[k:])) for k in range(maxlag)])
+    ax_row[2].stem(range(maxlag), ac)
+    ax_row[2].axhline(0, color='k', lw=1)
+    for h in (1, -1):
+        ax_row[2].axhline(h * 1.96 / np.sqrt(r.size), color='r', ls=':', lw=1)
+    ax_row[2].set_xlabel('receptor-index lag'); ax_row[2].set_ylabel('autocorr')
+    if show_titles:
+        ax_row[2].set_title('residual autocorrelation')
+
+
 def plot_residuals(bundle_dir: str, out_path: str = None) -> None:
-    """Plot residuals and diagnostics from a saved inversion bundle.
+    """Plot residuals and model-data-mismatch diagnostics, per flight.
+
+    Reproduces the notebook's observation-diagnostics and mismatch sections
+    (spatial maps of enhancement/modeled/residual, normalized-residual
+    histogram, residual-vs-modeled, and along-track autocorrelation), but
+    computed separately for each flight rather than aggregated over all
+    observations \u2014 each flight has its own background fit and track geometry,
+    so pooling residuals across flights can mask flight-specific bias or
+    correlation structure. Each diagnostic type is written to a single file
+    (``residuals_map.png``, ``residuals_autocorr.png``) with one row per flight.
     """
-    inv = load_inversion(bundle_dir)    
+    inv = load_inversion(bundle_dir)
     R = inv.receptors
     rlat, rlon = R['receptor_lat'], R['receptor_lon']
     z, modeled = R['enhancement'], R['modeled']
     resid = z - modeled
     flag = R.get('outlier_flag', np.zeros_like(z)).astype(bool)
     flight = R.get('receptor_flight', np.zeros_like(z, dtype=int)).astype(int)
-    fin = np.isfinite(resid) & ~flag
-
-    fig, ax = plt.subplots(1, 3, figsize=(16, 4.4), constrained_layout=True)
-    for a, (title, val, cmap) in zip(ax, [('enhancement z', z, 'viridis'),
-            ('modeled  Hx\u0302', modeled, 'viridis'), ('residual  z - Hx\u0302', resid, 'RdBu_r')]):
-        vlim = np.nanmax(np.abs(resid)) if cmap == 'RdBu_r' else None
-        kw = dict(vmin=-vlim, vmax=vlim) if vlim else {}
-        s = a.scatter(rlon, rlat, c=val, s=22, cmap=cmap, **kw)
-        if flag.any():
-            a.scatter(rlon[flag], rlat[flag], s=80, facecolors='none', edgecolors='k', label='outlier')
-            a.legend(loc='upper left')
-        a.set_title(title); a.set_xlabel('lon'); a.set_ylabel('lat'); fig.colorbar(s, ax=a, shrink=0.85)
-   
-    if out_path:
-        plt.savefig(out_path+'/'+'residuals_map.png', bbox_inches='tight')
-    else:
-        plt.show()
-
-    # robust mismatch scale (MAD) and normalized residuals
-    med = np.median(resid[fin])
-    sigma_mad = 1.4826 * np.median(np.abs(resid[fin] - med))
-    nresid = (resid - med) / sigma_mad
+    sels = _flights_present(inv.flight_ids or ['0'], flight)
+    n = len(sels)
 
     chi2r = inv.diagnostics.get('reduced_chi_square', float('nan'))
     print(f'reduced chi-square (saved): {chi2r:.3f}   (~1 = error model consistent)')
-    print(f'residual: mean {np.mean(resid[fin]):+.4f}  rms {np.sqrt(np.mean(resid[fin]**2)):.4f} ppm  '
-        f'robust sigma(MAD) {sigma_mad:.4f} ppm')
-    for f in np.unique(flight):
-        sel = fin & (flight == f)
-        fid = inv.flight_ids[f] if f < len(inv.flight_ids) else str(f)
-        print(f'  flight {fid:<14} n={sel.sum():4d}  bias {np.mean(resid[sel]):+.4f}  '
-            f'rms {np.sqrt(np.mean(resid[sel]**2)):.4f} ppm')
 
-    fig, ax = plt.subplots(1, 3, figsize=(16, 4.4), constrained_layout=True)
-    # (a) normalized-residual histogram vs N(0,1)
-    ax[0].hist(nresid[fin], bins=30, density=True, alpha=0.7)
-    xx = np.linspace(-4, 4, 100)
-    ax[0].plot(xx, np.exp(-xx**2 / 2) / np.sqrt(2 * np.pi), 'k--', label='N(0,1)')
-    ax[0].set_xlabel('residual / sigma_MAD'); ax[0].set_ylabel('density')
-    ax[0].set_title('normalized residual'); ax[0].legend()
-    # (b) residual vs modeled (bias / heteroscedasticity)
-    ax[1].scatter(modeled[fin], resid[fin], s=14, alpha=0.6); ax[1].axhline(0, color='k', lw=1)
-    ax[1].set_xlabel('modeled enhancement (ppm)'); ax[1].set_ylabel('residual (ppm)')
-    ax[1].set_title('residual vs modeled')
-    # (c) along-track autocorrelation, computed within the largest flight (index order ~ track)
-    big = np.bincount(flight[fin]).argmax()
-    r = resid[fin & (flight == big)]
-    r = (r - r.mean()) / (r.std() + 1e-12)
-    maxlag = min(40, max(2, r.size - 1))
-    ac = np.array([1.0 if k == 0 else float(np.mean(r[:-k] * r[k:])) for k in range(maxlag)])
-    ax[2].stem(range(maxlag), ac)
-    ax[2].axhline(0, color='k', lw=1)
-    for h in (1, -1):
-        ax[2].axhline(h * 1.96 / np.sqrt(r.size), color='r', ls=':', lw=1)
-    ax[2].set_xlabel('receptor-index lag'); ax[2].set_ylabel('autocorr')
-    ax[2].set_title(f'residual autocorrelation (flight {inv.flight_ids[big] if big < len(inv.flight_ids) else big})')
+    fig, ax = plt.subplots(n, 3, figsize=(16, 4.2 * n), constrained_layout=True, squeeze=False)
+    for i, (fid, sel) in enumerate(sels):
+        _residual_map_row(ax[i], fid, rlat[sel], rlon[sel], z[sel], modeled[sel], resid[sel],
+                           flag[sel], show_titles=(i == 0))
+    fig.suptitle('Observation diagnostics by flight')
     if out_path:
-        plt.savefig(out_path+'/'+'residuals_autocorr.png', bbox_inches='tight')
+        plt.savefig(os.path.join(out_path, 'residuals_map.png'), bbox_inches='tight')
+        plt.close(fig)
+    else:
+        plt.show()
+
+    fig, ax = plt.subplots(n, 3, figsize=(16, 4.2 * n), constrained_layout=True, squeeze=False)
+    for i, (fid, sel) in enumerate(sels):
+        fin = np.isfinite(resid[sel]) & ~flag[sel]
+        _mismatch_diagnostics_row(ax[i], fid, modeled[sel], resid[sel], fin, show_titles=(i == 0))
+    fig.suptitle('Model-data mismatch by flight')
+    if out_path:
+        plt.savefig(os.path.join(out_path, 'residuals_autocorr.png'), bbox_inches='tight')
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def _background_row(ax_row, fid, rlat, rlon, obs, bg, flag, show_titles) -> None:
+    """One flight's observed/background maps and their scatter relationship."""
+    vmin, vmax = np.nanmin(obs), np.nanmax(obs)
+    for a, (title, val) in zip(ax_row[:2], [('observed XCH4', obs), ('fitted background', bg)]):
+        s = a.scatter(rlon, rlat, c=val, s=18, cmap='viridis', vmin=vmin, vmax=vmax)
+        if flag.any():
+            a.scatter(rlon[flag], rlat[flag], s=70, facecolors='none', edgecolors='k', label='outlier')
+            a.legend(loc='upper left', fontsize=7)
+        if show_titles:
+            a.set_title(title)
+        a.set_xlabel('lon'); a.figure.colorbar(s, ax=a, shrink=0.85)
+    ax_row[0].set_ylabel(f'flight {fid}\nlat')
+
+    ax_row[2].scatter(obs, bg, s=12, alpha=0.6)
+    lim = [float(np.nanmin(obs)), float(np.nanmax(obs))]
+    ax_row[2].plot(lim, lim, 'k--', lw=1, label='1:1')
+    ax_row[2].set_xlabel('observed XCH4'); ax_row[2].set_ylabel('fitted background')
+    if show_titles:
+        ax_row[2].set_title('background rides the lower envelope')
+    ax_row[2].legend(fontsize=7)
+
+
+def plot_background(bundle_dir: str, out_path: str = None) -> None:
+    """Plot the background surface subtracted from observations, per flight.
+
+    Each flight gets its own lower-envelope planar (or higher-degree) fit (see
+    :mod:`halo_oe.background`); this maps the observed column and the fitted
+    background at each receptor, plus their scatter relationship, so the fit can
+    be checked against the raw data flight by flight. One file
+    (``background.png``) with a row per flight.
+    """
+    inv = load_inversion(bundle_dir)
+    R = inv.receptors
+    rlat, rlon = R['receptor_lat'], R['receptor_lon']
+    obs, bg = R['receptor_obs'], R['receptor_background']
+    flag = R.get('outlier_flag', np.zeros_like(obs)).astype(bool)
+    flight = R.get('receptor_flight', np.zeros_like(obs, dtype=int)).astype(int)
+    sels = _flights_present(inv.flight_ids or ['0'], flight)
+    n = len(sels)
+
+    fig, ax = plt.subplots(n, 3, figsize=(16, 4.2 * n), constrained_layout=True, squeeze=False)
+    for i, (fid, sel) in enumerate(sels):
+        _background_row(ax[i], fid, rlat[sel], rlon[sel], obs[sel], bg[sel], flag[sel],
+                         show_titles=(i == 0))
+    fig.suptitle('Background plane by flight')
+    if out_path:
+        plt.savefig(os.path.join(out_path, 'background.png'), bbox_inches='tight')
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def _flux_block_prior_density(inv, name):
+    """Prior emission density for a gridded state block, on active cells.
+
+    Category blocks map directly onto a super-category prior field; a
+    single-block total-inventory run has no matching category key, so its
+    prior density is the sum of all super-category fields (== the inventory
+    total), mirroring the post-hoc aggregation helper in the analysis notebook.
+    """
+    if name in inv.group_fields:
+        return inv.group_fields[name]
+    return sum(inv.group_fields.values())
+
+
+def plot_flux_summary(bundle_dir: str, out_path: str = None) -> None:
+    """Summarize prior vs posterior integrated fluxes, with uncertainty.
+
+    Two files:
+
+    * ``flux_maps.png`` \u2014 prior flux density, posterior flux density, and
+      posterior 1\u03c3 flux density, one column per gridded state block (category
+      fields if the inversion was decomposed, else the single inventory total).
+    * ``flux_totals.png`` \u2014 a grouped bar chart of the saved flux report (prior
+      vs. posterior \u00b1 1\u03c3), at whatever granularity was solved: just the total,
+      or per-category totals plus the domain total when decomposed.
+
+    This is exactly the information in ``inv.report`` / ``inv.field`` \u2014 no
+    re-solve, no functional beyond what the bundle already stores.
+    """
+    inv = load_inversion(bundle_dir)
+    _plot_flux_maps(inv, out_path)
+    _plot_flux_bars(inv, out_path)
+
+
+def _plot_flux_maps(inv, out_path) -> None:
+    grid, core = inv.grid, inv.core
+    m = core.mask
+    rows = np.where(m.any(1))[0]; cols = np.where(m.any(0))[0]
+    r0, r1, c0, c1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
+    EXTENT = [grid.lon[c0], grid.lon[c1 - 1], grid.lat[r0], grid.lat[r1 - 1]]
+    crop = lambda f: f[r0:r1, c0:c1]
+
+    cats = [b.name for b in inv.state.blocks if b.name not in ('bc', 'buffer')]
+    std_parts = inv.state.unpack(inv.posterior.stddev())
+
+    fig, ax = plt.subplots(3, len(cats), figsize=(4.2 * len(cats), 12),
+                            constrained_layout=True, squeeze=False)
+    for j, name in enumerate(cats):
+        prior_field = core.to_field(_flux_block_prior_density(inv, name))
+        post_field = inv.field(name) * prior_field          # posterior scalar x prior density
+        std_field = core.to_field(std_parts[name]) * prior_field   # per-cell 1sigma, ignoring cross-cell covariance
+        vmax = float(np.nanmax([np.nanmax(prior_field), np.nanmax(post_field)]))
+
+        im0 = ax[0, j].imshow(crop(prior_field), origin='lower', extent=EXTENT, aspect='auto',
+                              cmap='viridis', vmin=0, vmax=vmax)
+        ax[0, j].set_title(f'prior flux: {name}'); fig.colorbar(im0, ax=ax[0, j], shrink=0.8)
+        im1 = ax[1, j].imshow(crop(post_field), origin='lower', extent=EXTENT, aspect='auto',
+                              cmap='viridis', vmin=0, vmax=vmax)
+        ax[1, j].set_title(f'posterior flux: {name}'); fig.colorbar(im1, ax=ax[1, j], shrink=0.8)
+        im2 = ax[2, j].imshow(crop(std_field), origin='lower', extent=EXTENT, aspect='auto', cmap='magma')
+        ax[2, j].set_title(f'posterior 1\u03c3 flux: {name}'); fig.colorbar(im2, ax=ax[2, j], shrink=0.8)
+    for a in ax.ravel(): a.set_xlabel('lon'); a.set_ylabel('lat')
+    fig.suptitle(f"Flux density ({inv.report.get('unit_label', '')} per m\u00b2)")
+    if out_path:
+        plt.savefig(os.path.join(out_path, 'flux_maps.png'), bbox_inches='tight')
+        plt.close(fig)
+    else:
+        plt.show()
+
+
+def _plot_flux_bars(inv, out_path) -> None:
+    report = inv.report
+    names = report['names']
+    prior = np.asarray(report['prior'])
+    posterior = np.asarray(report['posterior'])
+    post_sd = np.asarray(report['posterior_stddev'])
+    unit = report.get('unit_label', '')
+
+    x = np.arange(len(names)); w = 0.35
+    fig, ax = plt.subplots(figsize=(max(1.8 * len(names), 4) + 2, 5), constrained_layout=True)
+    ax.bar(x - w / 2, prior, width=w, label='prior')
+    ax.bar(x + w / 2, posterior, width=w, yerr=post_sd, capsize=4, label='posterior \u00b1 1\u03c3')
+    ax.set_xticks(x); ax.set_xticklabels(names, rotation=30, ha='right')
+    ax.set_ylabel(f'integrated flux ({unit})')
+    ax.set_title('prior vs posterior flux, by category'); ax.legend()
+    if out_path:
+        plt.savefig(os.path.join(out_path, 'flux_totals.png'), bbox_inches='tight')
+        plt.close(fig)
     else:
         plt.show()
