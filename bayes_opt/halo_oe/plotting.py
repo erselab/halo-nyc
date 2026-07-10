@@ -30,7 +30,8 @@ def plot_posterior(inv: 'Inversion', out_path: str | None = None) -> None:
         ax[1, j].set_title(f'posterior 1\u03c3: {name}'); fig.colorbar(im1, ax=ax[1, j], shrink=0.8)
     for a in ax.ravel(): a.set_xlabel('lon'); a.set_ylabel('lat')
     if out_path:
-        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(out_path, 'posterior.png'), dpi=300, bbox_inches='tight')
+        plt.close(fig)
     else:
         plt.show()
 
