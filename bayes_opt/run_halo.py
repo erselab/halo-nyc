@@ -37,7 +37,7 @@ from halo_oe.emissions import category_priors_on_grid  # noqa: E402
 from halo_oe.io_bundle import load_inversion, save_inversion  # noqa: E402
 from halo_oe.pipeline import flight_paths, invert, load_context  # noqa: E402
 from halo_oe.plotting import (  # noqa: E402
-    plot_background, plot_flux_summary, plot_posterior, plot_residuals,
+    plot_background, plot_flux_summary, plot_leg_offsets, plot_posterior, plot_residuals,
 )
 
 
@@ -65,6 +65,7 @@ _PLOT_FUNCS = {
     "residuals": lambda run_dir: plot_residuals(run_dir, out_path=run_dir),
     "background": lambda run_dir: plot_background(run_dir, out_path=run_dir),
     "flux_summary": lambda run_dir: plot_flux_summary(run_dir, out_path=run_dir),
+    "leg_offsets": lambda run_dir: plot_leg_offsets(run_dir, out_path=run_dir),
 }
 
 

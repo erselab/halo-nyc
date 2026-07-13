@@ -112,6 +112,7 @@ def save_inversion(dirpath: str, ctx, res) -> str:
         ds.createVariable("receptor_lon", "f8", ("receptor",))[:] = cat("receptor_lon")
         ds.createVariable("receptor_obs", "f8", ("receptor",))[:] = cat("receptor_obs")
         ds.createVariable("receptor_background", "f8", ("receptor",))[:] = np.asarray(ctx.background)
+        ds.createVariable("receptor_background_offset", "f8", ("receptor",))[:] = np.asarray(ctx.background_offset)
         ds.createVariable("enhancement", "f8", ("receptor",))[:] = ctx.obs.z
         if ctx.flight_index is not None:
             v = ds.createVariable("receptor_flight", "i4", ("receptor",))

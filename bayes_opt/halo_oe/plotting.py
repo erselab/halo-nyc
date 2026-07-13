@@ -412,3 +412,59 @@ def _plot_flux_bars(inv, out_path) -> None:
         plt.close(fig)
     else:
         plt.show()
+
+
+def plot_leg_offsets(bundle_dir: str, out_path: str = None) -> None:
+    """Map the kriged per-leg background offset, per flight.
+
+    Only meaningful for a bundle solved with ``[background] use_leg_offsets =
+    true``; the offset is exactly what :func:`halo_oe.background.fit_leg_offsets`
+    added on top of the flight-wide plane (see ``receptor_background_offset``
+    in the bundle's ``fields.nc``) — saved directly rather than re-derived, so
+    this needs no re-fit and no second (plane-only) run to diff against. Prints
+    a message and does nothing if the bundle predates this field, or if every
+    flight's offset is exactly zero (leg offsets were off). Checks the bundle's
+    own saved config.ini first and skips the (expensive) full bundle load
+    entirely when ``use_leg_offsets`` was off, rather than materializing
+    factors.npz just to find there is nothing to plot.
+    """
+    cfg_path = os.path.join(bundle_dir, 'config.ini')
+    if os.path.exists(cfg_path):
+        from goe.config import Config
+        if not Config(cfg_path).get_bool('background', 'use_leg_offsets', default=False):
+            print('use_leg_offsets was off for this run; skipping (no bundle load needed)')
+            return
+
+    inv = load_inversion(bundle_dir)
+    R = inv.receptors
+    if 'receptor_background_offset' not in R:
+        print('no receptor_background_offset in this bundle (predates leg-offset '
+              'background support, or was never re-saved since)')
+        return
+    rlat, rlon = R['receptor_lat'], R['receptor_lon']
+    offset = R['receptor_background_offset']
+    flight = R.get('receptor_flight', np.zeros_like(offset, dtype=int)).astype(int)
+    flight_ids = inv.flight_ids or ['0']
+
+    if np.allclose(offset, 0.0):
+        print('receptor_background_offset is all zero (use_leg_offsets was off for this run)')
+        return
+
+    sels = _flights_present(flight_ids, flight)
+    n = len(sels)
+    vmax = float(np.nanmax(np.abs(offset)))
+
+    fig, ax = plt.subplots(1, n, figsize=(5.5 * n, 5), constrained_layout=True, squeeze=False)
+    ax = ax[0]
+    for i, (fid, sel) in enumerate(sels):
+        s = ax[i].scatter(rlon[sel], rlat[sel], c=offset[sel], s=16, cmap='RdBu_r',
+                          vmin=-vmax, vmax=vmax)
+        ax[i].set_title(f'flight {fid}'); ax[i].set_xlabel('lon')
+        fig.colorbar(s, ax=ax[i], shrink=0.85, label='leg offset (ppm)')
+    ax[0].set_ylabel('lat')
+    fig.suptitle('Kriged per-leg background offset (added on top of the flight-wide plane)')
+    if out_path:
+        plt.savefig(os.path.join(out_path, 'leg_offsets.png'), bbox_inches='tight')
+        plt.close(fig)
+    else:
+        plt.show()

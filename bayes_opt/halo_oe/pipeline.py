@@ -73,6 +73,7 @@ class InversionContext:
     core: GriddedState
     base: LinearOperator                 # forward operator over active cells (rows stacked over flights)
     background: np.ndarray               # per-receptor background (all flights concatenated)
+    background_offset: np.ndarray        # leg-offset component alone (zeros unless enabled)
     obs: Observations                    # enhancement vector z + error R (all flights)
     priors: dict[str, np.ndarray]        # {inventory: prior field on the grid}
     jfs: list = field(default_factory=list)            # open JacobianFile per flight
@@ -142,8 +143,8 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
     components = cfg.get("observations", "error_model", default="simple") == "components"
 
     grid = core = priors = buffer = None
-    jfs, bases, buf_bases, backgrounds, zs, raws, Rs, flight_ids, flight_index = \
-        [], [], [], [], [], [], [], [], []
+    jfs, bases, buf_bases, backgrounds, bg_offsets, zs, raws, Rs, flight_ids, flight_index = \
+        [], [], [], [], [], [], [], [], [], []
     for fi, (fid, path) in enumerate(paths):
         jf = JacobianFile(path)
         if grid is None:
@@ -164,13 +165,13 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
         else:
             base_f = jf.operator(active=core.active, in_memory=in_memory, row_chunk=row_chunk)
         sens = base_f.matvec(np.ones(core.n_active))
-        bg_f = receptor_background(jf, cfg, domain_sensitivity=sens)
+        bg_f, bg_offset_f = receptor_background(jf, cfg, domain_sensitivity=sens, fid=fid)
         obs_f = build_observations(jf.receptor_obs, error_stddev=error_stddev,
                                    baseline=bg_f, error_inflation=inflation)
         R_f = (build_obs_error_covariance(jf.receptor_lat, jf.receptor_lon, cfg)
                if components else obs_f.R)
 
-        jfs.append(jf); bases.append(base_f); backgrounds.append(bg_f)
+        jfs.append(jf); bases.append(base_f); backgrounds.append(bg_f); bg_offsets.append(bg_offset_f)
         zs.append(obs_f.z); raws.append(obs_f.raw); Rs.append(R_f)
         flight_ids.append(fid)
         flight_index.append(np.full(jf.n_receptors, fi, dtype=int))
@@ -181,9 +182,10 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
         buffer_op = buf_bases[0] if len(buf_bases) == 1 else BlockRow(buf_bases)
     R = Rs[0] if len(Rs) == 1 else BlockDiagonalCovariance(Rs)
     background = np.concatenate(backgrounds)
+    background_offset = np.concatenate(bg_offsets)
     obs = Observations(z=np.concatenate(zs), R=R,
                        raw=np.concatenate(raws), baseline=background)
-    return InversionContext(cfg, grid, core, base, background, obs, priors,
+    return InversionContext(cfg, grid, core, base, background, background_offset, obs, priors,
                             jfs, flight_ids, np.concatenate(flight_index), buffer, buffer_op)
 
 

@@ -1,0 +1,43 @@
+09:04:00  === resuming batch (skipping already-complete bundles) ===
+09:04:00  [1/48] already complete, skipping: runs/tune_0.01ppm_10km
+09:04:00  [2/48] already complete, skipping: runs/tune_0.01ppm_1.5km
+09:04:00  [3/48] already complete, skipping: runs/tune_0.01ppm_1km
+09:04:00  [4/48] already complete, skipping: runs/tune_0.01ppm_20km
+09:04:00  [5/48] already complete, skipping: runs/tune_0.01ppm_2km
+09:04:00  [6/48] already complete, skipping: runs/tune_0.01ppm_3km
+09:04:00  [7/48] already complete, skipping: runs/tune_0.01ppm_5km
+09:04:00  [8/48] already complete, skipping: runs/tune_0.025ppm_10km
+09:04:00  [9/48] already complete, skipping: runs/tune_0.025ppm_1.5km
+09:04:00  [10/48] already complete, skipping: runs/tune_0.025ppm_1km
+09:04:00  [11/48] already complete, skipping: runs/tune_0.025ppm_20km
+09:04:00  [12/48] already complete, skipping: runs/tune_0.025ppm_2km
+09:04:00  [13/48] already complete, skipping: runs/tune_0.025ppm_3km
+09:04:00  [14/48] already complete, skipping: runs/tune_0.025ppm_5km
+09:04:00  [15/48] already complete, skipping: runs/tune_0.02ppm_10km
+09:04:00  [16/48] already complete, skipping: runs/tune_0.02ppm_1.5km
+09:04:00  [17/48] already complete, skipping: runs/tune_0.02ppm_1km
+09:04:00  [18/48] already complete, skipping: runs/tune_0.02ppm_20km
+09:04:00  [19/48] already complete, skipping: runs/tune_0.02ppm_2km
+09:04:00  [20/48] already complete, skipping: runs/tune_0.02ppm_3km
+09:04:00  SKIP (no bundle): runs/tune_0.02ppm_5km
+09:04:00  [21/48] already complete, skipping: runs/tune_0.035ppm_10km
+09:04:00  [22/48] already complete, skipping: runs/tune_0.035ppm_1.5km
+09:04:00  [23/48] already complete, skipping: runs/tune_0.035ppm_1km
+09:04:00  [24/48] already complete, skipping: runs/tune_0.035ppm_20km
+09:04:00  [25/48] already complete, skipping: runs/tune_0.035ppm_2km
+09:04:01  [26/48] already complete, skipping: runs/tune_0.035ppm_3km
+09:04:01  [27/48] already complete, skipping: runs/tune_0.035ppm_5km
+09:04:01  [28/48] already complete, skipping: runs/tune_0.03ppm_10km
+09:04:01  [29/48] already complete, skipping: runs/tune_0.03ppm_1.5km
+09:04:01  [30/48] plotting runs/tune_0.03ppm_1km
+09:20:07  [31/48] plotting runs/tune_0.03ppm_20km
+09:35:33  [32/48] plotting runs/tune_0.03ppm_2km
+09:51:46  [33/48] plotting runs/tune_0.03ppm_3km
+10:07:39  [34/48] plotting runs/tune_0.03ppm_5km
+10:23:20  [35/48] plotting runs/tune_0.04ppm_10km
+10:38:30  [36/48] plotting runs/tune_0.04ppm_1.5km
+10:54:19  [37/48] plotting runs/tune_0.04ppm_1km
+11:10:25  [38/48] plotting runs/tune_0.04ppm_20km
+11:25:40  [39/48] plotting runs/tune_0.04ppm_2km
+11:41:28  [40/48] plotting runs/tune_0.04ppm_3km
+11:57:46  [41/48] plotting runs/tune_0.04ppm_5km

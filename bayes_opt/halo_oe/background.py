@@ -33,9 +33,26 @@ coordinates/observations; for multi-flight assimilation, call
 
 Other background sources (e.g. a model boundary condition convolved with the
 column weighting function) can be swapped in behind :func:`receptor_background`.
+
+Optional refinement: per-leg offsets.
+-------------------------------------
+A single plane per flight cannot represent background drift *within* a flight
+between individual survey legs (time-of-day / boundary-layer evolution between
+passes) when those legs revisit similar geography, since a leg boundary is a
+time-ordered, not spatial, discontinuity. When ``[background] use_leg_offsets``
+is enabled, :func:`receptor_background` fits the usual flight-wide plane first,
+then adds one additive offset per detected leg (see :func:`detect_legs`),
+estimated from that leg's own lower-envelope residual and shrunk toward zero
+when a leg has too few informative points to estimate reliably (see
+:func:`fit_leg_offsets`). This requires each flight's raw observation file
+(``[background] flight_data_dir``) to recover real elapsed time, which the
+Jacobian file does not carry.
 """
 
 from __future__ import annotations
+
+import glob
+import os
 
 import numpy as np
 
@@ -45,6 +62,8 @@ __all__ = [
     "fit_lower_envelope_surface",
     "flight_background",
     "domain_insensitive_mask",
+    "detect_legs",
+    "fit_leg_offsets",
     "receptor_background",
 ]
 
@@ -170,8 +189,223 @@ def domain_insensitive_mask(domain_sensitivity, quantile: float) -> np.ndarray:
     return ds <= thr
 
 
-def receptor_background(jacobian_file, config, domain_sensitivity=None) -> np.ndarray:
-    """Return the per-receptor background array (length ``n_receptors``).
+def detect_legs(
+    lat: np.ndarray,
+    lon: np.ndarray,
+    time_s: np.ndarray,
+    gap_seconds: float = 8.0,
+    min_leg_size: int = 10,
+    axis_deg: float = 45.0,
+) -> np.ndarray:
+    """Segment a flight track (in time order) into survey legs.
+
+    A leg boundary is a real elapsed-time gap (turns are dropped from the
+    binned observation product, so a gap in ``time_s`` well above the typical
+    sampling cadence marks a turn) that *also* coincides with a reversal
+    between the two leg headings — this survey flies every leg along one axis
+    (``axis_deg``/``axis_deg + 180``, default NE/SW), so a time gap without a
+    heading reversal is a mid-leg data dropout, not a real leg boundary.
+    Candidate legs shorter than ``min_leg_size`` (typically a stray point
+    caught mid-turn) are merged into the preceding leg.
+
+    Parameters
+    ----------
+    lat, lon:
+        Receptor coordinates, in track (time) order.
+    time_s:
+        Elapsed time in seconds, same order, same length.
+    gap_seconds:
+        Minimum elapsed-time gap between consecutive receptors to be a
+        turn candidate. Should sit comfortably above the normal sampling
+        cadence (a few seconds for a 1000 m-binned product).
+    min_leg_size:
+        Candidate legs with fewer receptors than this are merged into the
+        previous leg.
+    axis_deg:
+        Compass bearing (degrees) of one leg direction; the opposite
+        direction (``axis_deg + 180``) is the other. Receptors are classified
+        by which side of this axis their local bearing falls on.
+
+    Returns
+    -------
+    np.ndarray
+        Integer leg id per receptor, ``0..n_legs-1`` in track order.
+    """
+    lat = np.asarray(lat, dtype=float)
+    lon = np.asarray(lon, dtype=float)
+    time_s = np.asarray(time_s, dtype=float)
+    n = lat.size
+
+    dt = np.diff(time_s)
+    dlat = np.gradient(lat)
+    dlon = np.gradient(lon)
+    bearing = (np.degrees(np.arctan2(dlon * np.cos(np.radians(lat)), dlat)) + 360) % 360
+    axis_side = np.cos(np.radians(bearing) - np.radians(axis_deg)) > 0
+
+    boundaries = []
+    for i in np.flatnonzero(dt > gap_seconds):
+        before = axis_side[max(0, i - 3):i + 1].mean() > 0.5
+        after = axis_side[i + 1:i + 5].mean() > 0.5
+        if before != after:
+            boundaries.append(i + 1)
+
+    bounds = [0] + boundaries + [n]
+    sizes = np.diff(bounds)
+    merged = [bounds[0]]
+    for k in range(1, len(bounds) - 1):
+        if sizes[k - 1] >= min_leg_size:
+            merged.append(bounds[k])
+    merged.append(bounds[-1])
+    merged = sorted(set(merged))
+
+    leg_id = np.zeros(n, dtype=int)
+    for k in range(len(merged) - 1):
+        leg_id[merged[k]:merged[k + 1]] = k
+    return leg_id
+
+
+def fit_leg_offsets(
+    value: np.ndarray,
+    plane_background: np.ndarray,
+    leg_id: np.ndarray,
+    leg_time: np.ndarray,
+    fit_mask: np.ndarray | None = None,
+    quantile: float = 0.25,
+    prior_stddev: float = 0.05,
+    correlation_time_s: float = 600.0,
+    noise_stddev: float = 0.02,
+    min_reliable_points: int = 15,
+) -> np.ndarray:
+    """Correlated per-leg additive offset on top of a flight-wide background plane.
+
+    Legs a few minutes apart should have *similar* background levels —
+    boundary-layer evolution is a smooth, slowly-varying process, not a set of
+    independent per-leg free parameters — so all legs' offsets are estimated
+    **jointly** via a small Gaussian-process (kriging) smoother over each
+    leg's own noisy lower-``quantile`` residual estimate (restricted to
+    ``fit_mask``, same rationale as the flight-wide plane), with an
+    exponential prior correlation in elapsed time (``correlation_time_s``).
+    A leg with few eligible points has a noisy raw estimate and gets pulled
+    toward its time-neighbors' consensus — sharing their information — rather
+    than being used as-is or shrunk toward an arbitrary zero.
+
+    Parameters
+    ----------
+    leg_time:
+        Per-receptor elapsed time (seconds), same length as ``value``; each
+        leg is placed at its mean time for the correlation kernel.
+    prior_stddev:
+        Prior 1-sigma (ppm) of how much the true offset varies leg-to-leg.
+    correlation_time_s:
+        Exponential correlation length (seconds) between legs' offsets; legs
+        separated by much more than this are treated as ~independent.
+    noise_stddev:
+        Approximate per-receptor scatter (ppm) used to turn each leg's sample
+        size into a base noise variance for its raw estimate (``noise_stddev**2
+        / n``).
+    min_reliable_points:
+        Below this many eligible points, a quantile is essentially a single
+        draw, not an average — ``n / min_reliable_points`` worth of the base
+        noise term underestimates that, so an extra ``prior_stddev**2 * (1 -
+        n / min_reliable_points)`` is added on top, smoothly driving a
+        near-empty leg's variance up to the prior's own scale (so it is
+        pulled almost entirely from its neighbors) while leaving well-sampled
+        legs (``n >= min_reliable_points``) at the base term alone.
+
+    Returns the offset evaluated at every receptor (length = ``len(value)``).
+    """
+    resid = np.asarray(value, dtype=float) - np.asarray(plane_background, dtype=float)
+    leg_id = np.asarray(leg_id)
+    leg_time = np.asarray(leg_time, dtype=float)
+    eligible = np.ones(resid.shape, dtype=bool) if fit_mask is None else np.asarray(fit_mask, dtype=bool)
+
+    legs = np.unique(leg_id)
+    n_legs = legs.size
+    raw = np.zeros(n_legs)
+    obs_var = np.zeros(n_legs)
+    t_mid = np.zeros(n_legs)
+    for k, leg in enumerate(legs):
+        in_leg = leg_id == leg
+        t_mid[k] = leg_time[in_leg].mean()
+        sel = in_leg & eligible
+        n = int(sel.sum())
+        reliability_gap = max(0.0, 1.0 - n / min_reliable_points)
+        if n > 0:
+            raw[k] = np.quantile(resid[sel], quantile)
+            obs_var[k] = noise_stddev ** 2 / n + prior_stddev ** 2 * reliability_gap
+        else:
+            obs_var[k] = 1e6   # no data at all: ~zero weight, filled in entirely by neighbors
+
+    dt = np.abs(t_mid[:, None] - t_mid[None, :])
+    K = prior_stddev ** 2 * np.exp(-dt / max(correlation_time_s, 1e-9))
+    smooth = K @ np.linalg.solve(K + np.diag(obs_var), raw)
+
+    offset = np.zeros(resid.shape)
+    for k, leg in enumerate(legs):
+        offset[leg_id == leg] = smooth[k]
+    return offset
+
+
+def _resolve_flight_data_path(fid: str, flight_data_dir: str) -> str:
+    """Locate the raw observation file for flight ``fid`` under ``flight_data_dir``.
+
+    ``fid`` is ``{date}`` or ``{date}_{flight_number}`` (e.g. ``20230726_1``);
+    a bare date defaults to flight number 1. Matches the STAQS-HALO naming
+    convention (``*{date}*_F{flight_number}_*.h5``); raises if no file (or more
+    than one) matches, rather than silently guessing.
+    """
+    parts = str(fid).split("_")
+    date = parts[0]
+    fnum = parts[1] if len(parts) > 1 else "1"
+    pattern = os.path.join(flight_data_dir, f"*{date}*_F{fnum}_*.h5")
+    matches = sorted(glob.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(f"no flight_data file for flight {fid!r} matching {pattern!r}")
+    if len(matches) > 1:
+        raise FileNotFoundError(f"ambiguous flight_data file for flight {fid!r}: {matches}")
+    return matches[0]
+
+
+def _load_receptor_time(fid: str, flight_data_dir: str, receptor_lat, receptor_lon) -> np.ndarray:
+    """Load elapsed time (seconds) for ``fid``, aligned to the Jacobian's receptors.
+
+    The raw observation file must have the same receptors in the same order
+    as the Jacobian (both are built from the same underlying flight product);
+    verified by comparing coordinates, not just length, so a silent misalignment
+    raises instead of producing a wrong leg segmentation.
+    """
+    import h5py
+
+    path = _resolve_flight_data_path(fid, flight_data_dir)
+    with h5py.File(path, "r") as f:
+        t = np.asarray(f["time"][:], dtype=float) * 3600.0   # decimal hours -> seconds
+        lat = np.asarray(f["lat"][:], dtype=float)
+        lon = np.asarray(f["lon"][:], dtype=float)
+
+    receptor_lat = np.asarray(receptor_lat, dtype=float)
+    receptor_lon = np.asarray(receptor_lon, dtype=float)
+    if lat.shape != receptor_lat.shape or not (
+        np.allclose(lat, receptor_lat, atol=1e-4) and np.allclose(lon, receptor_lon, atol=1e-4)
+    ):
+        raise ValueError(
+            f"flight_data file {path!r} receptor coordinates do not match the Jacobian's "
+            f"receptors for flight {fid!r} -- cannot align time to receptors"
+        )
+    return t
+
+
+def receptor_background(
+    jacobian_file, config, domain_sensitivity=None, fid: str | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(background, leg_offset)``, each length ``n_receptors``.
+
+    ``background`` is the full per-receptor background actually subtracted
+    from the observations (plane, plus the leg offset when enabled).
+    ``leg_offset`` is just the leg-offset component on its own (all zeros
+    when ``use_leg_offsets`` is off, or method is not ``planar``) — kept
+    separate so it can be saved and mapped independently (see
+    :func:`halo_oe.plotting.plot_leg_offsets`) without needing to re-fit or
+    diff two runs to recover it.
 
     Reads the method and parameters from the ``[background]`` config section:
 
@@ -184,6 +418,17 @@ def receptor_background(jacobian_file, config, domain_sensitivity=None) -> np.nd
       1.0 uses all receptors (no restriction).
     * ``constant_value`` for the constant fallback (defaults to
       ``[observations] baseline``)
+    * ``use_leg_offsets`` (default false) — after the flight-wide plane, add a
+      per-leg offset (see :func:`fit_leg_offsets`); requires ``fid`` and
+      ``flight_data_dir`` (below).
+    * ``flight_data_dir`` — directory of raw per-flight observation files, used
+      only when ``use_leg_offsets`` is enabled (leg detection needs real
+      elapsed time, which the Jacobian file does not carry).
+    * ``leg_gap_seconds`` (default 8.0), ``leg_min_size`` (default 10),
+      ``leg_axis_deg`` (default 45.0) — see :func:`detect_legs`.
+    * ``leg_offset_stddev`` (default 0.05), ``leg_correlation_time_s``
+      (default 600.0), ``leg_offset_noise_stddev`` (default 0.02),
+      ``leg_min_reliable_points`` (default 15) — see :func:`fit_leg_offsets`.
 
     Parameters
     ----------
@@ -191,6 +436,10 @@ def receptor_background(jacobian_file, config, domain_sensitivity=None) -> np.nd
         Optional per-receptor measure of in-domain influence (e.g. the row sum of
         the masked Jacobian). Required to apply the domain-sensitivity
         restriction; ignored otherwise.
+    fid:
+        This flight's id (e.g. ``"20230726_1"``), used to locate its raw
+        observation file when ``use_leg_offsets`` is enabled. Not needed
+        otherwise.
 
     Falls back to a constant if receptor coordinates are unavailable.
     """
@@ -201,14 +450,14 @@ def receptor_background(jacobian_file, config, domain_sensitivity=None) -> np.nd
         value = config.get_float("background", "constant_value", default=None)
         if value is None:
             value = config.get_float("observations", "baseline", default=0.0)
-        return constant_background(n, value)
+        return constant_background(n, value), np.zeros(n)
 
     lat = jacobian_file.receptor_lat
     lon = jacobian_file.receptor_lon
     obs = jacobian_file.receptor_obs
     if lat is None or lon is None or obs is None:
         value = config.get_float("observations", "baseline", default=0.0)
-        return constant_background(n, value)
+        return constant_background(n, value), np.zeros(n)
 
     # Restrict the fit to receptors insensitive to the inversion domain so that
     # in-domain enhancement does not contaminate the background it is subtracted
@@ -218,10 +467,35 @@ def receptor_background(jacobian_file, config, domain_sensitivity=None) -> np.nd
     if domain_sensitivity is not None and q is not None and q < 1.0:
         fit_mask = domain_insensitive_mask(domain_sensitivity, q)
 
-    return flight_background(
+    quantile = config.get_float("background", "envelope_quantile", default=0.25)
+    coeffs, design = fit_lower_envelope_surface(
         lat, lon, obs,
         degree=config.get_int("background", "degree", default=1),
-        quantile=config.get_float("background", "envelope_quantile", default=0.25),
+        quantile=quantile,
         n_iter=config.get_int("background", "n_iter", default=5),
         fit_mask=fit_mask,
     )
+    background = design @ coeffs
+    offset = np.zeros(n)
+
+    if config.get_bool("background", "use_leg_offsets", default=False):
+        if fid is None:
+            raise ValueError("[background] use_leg_offsets is enabled but no flight id was given")
+        flight_data_dir = config.get("background", "flight_data_dir")
+        time_s = _load_receptor_time(fid, flight_data_dir, lat, lon)
+        leg_id = detect_legs(
+            lat, lon, time_s,
+            gap_seconds=config.get_float("background", "leg_gap_seconds", default=8.0),
+            min_leg_size=config.get_int("background", "leg_min_size", default=10),
+            axis_deg=config.get_float("background", "leg_axis_deg", default=45.0),
+        )
+        offset = fit_leg_offsets(
+            obs, background, leg_id, time_s, fit_mask=fit_mask, quantile=quantile,
+            prior_stddev=config.get_float("background", "leg_offset_stddev", default=0.05),
+            correlation_time_s=config.get_float("background", "leg_correlation_time_s", default=600.0),
+            noise_stddev=config.get_float("background", "leg_offset_noise_stddev", default=0.02),
+            min_reliable_points=config.get_int("background", "leg_min_reliable_points", default=15),
+        )
+        background = background + offset
+
+    return background, offset

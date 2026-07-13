@@ -21,6 +21,7 @@ import halo_oe  # noqa: F401,E402
 from halo_oe.background import (  # noqa: E402
     constant_background, polynomial_design, fit_lower_envelope_surface,
     flight_background, receptor_background, domain_insensitive_mask,
+    detect_legs, fit_leg_offsets,
 )
 
 
@@ -94,6 +95,8 @@ class _Cfg:
         v = self._d.get((s, k), default); return None if v is None else float(v)
     def get_int(self, s, k, default=None):
         v = self._d.get((s, k), default); return None if v is None else int(v)
+    def get_bool(self, s, k, default=None):
+        v = self._d.get((s, k), default); return None if v is None else bool(v)
 
 
 def test_fit_mask_excludes_points():
@@ -138,9 +141,10 @@ def test_receptor_background_uses_domain_sensitivity():
     cfg = _Cfg({("background", "method"): "planar", ("background", "degree"): 1,
                 ("background", "envelope_quantile"): 0.5, ("background", "n_iter"): 4,
                 ("background", "domain_sensitivity_quantile"): 0.5})
-    bg = receptor_background(jf, cfg, domain_sensitivity=sens)
+    bg, offset = receptor_background(jf, cfg, domain_sensitivity=sens)
     # background should sit near the clean plane, not inflated by the hot receptors
     assert np.sqrt(np.mean((bg - true) ** 2)) < 0.03
+    assert np.allclose(offset, 0.0)   # use_leg_offsets is off
 
 
 def test_receptor_background_dispatch():
@@ -148,18 +152,110 @@ def test_receptor_background_dispatch():
     lat, lon, obs, _ = _synthetic_flight(rng)
     jf = _FakeJac(lat, lon, obs)
 
-    planar = receptor_background(jf, _Cfg({("background", "method"): "planar"}))
+    planar, planar_offset = receptor_background(jf, _Cfg({("background", "method"): "planar"}))
     assert planar.shape == (len(obs),)
     assert planar.std() > 0  # spatially varying
+    assert np.allclose(planar_offset, 0.0)
 
-    const = receptor_background(jf, _Cfg({
+    const, const_offset = receptor_background(jf, _Cfg({
         ("background", "method"): "constant", ("background", "constant_value"): 1.9}))
     assert np.allclose(const, 1.9)
+    assert np.allclose(const_offset, 0.0)
 
     # missing coordinates -> constant fallback
     jf2 = _FakeJac(None, None, obs)
-    fb = receptor_background(jf2, _Cfg({("observations", "baseline"): 1.95}))
+    fb, fb_offset = receptor_background(jf2, _Cfg({("observations", "baseline"): 1.95}))
     assert np.allclose(fb, 1.95)
+    assert np.allclose(fb_offset, 0.0)
+
+
+def _synthetic_track(n_per_leg, headings_deg, gap_s=200.0, step_s=5.0, start=(40.5, -74.5)):
+    """A track flown along ``headings_deg`` (one leg per heading), separated by
+    real time gaps, with receptors spaced ``step_s`` apart along each leg."""
+    lat0, lon0 = start
+    lats, lons, times = [], [], []
+    t = 0.0
+    lat, lon = lat0, lon0
+    step_deg = 0.012   # ~ observed median step size
+    for heading in headings_deg:
+        for _ in range(n_per_leg):
+            lats.append(lat); lons.append(lon); times.append(t)
+            lat += step_deg * np.cos(np.radians(heading))
+            lon += step_deg * np.sin(np.radians(heading)) / np.cos(np.radians(lat))
+            t += step_s
+        t += gap_s   # turn between legs
+    return np.array(lats), np.array(lons), np.array(times)
+
+
+def test_detect_legs_basic():
+    # NE leg, then SW leg (heading reversal at a real time gap)
+    lat, lon, t = _synthetic_track(50, [45.0, 225.0])
+    leg_id = detect_legs(lat, lon, t)
+    assert leg_id.max() + 1 == 2
+    assert (leg_id[:50] == 0).all()
+    assert (leg_id[50:] == 1).all()
+
+
+def test_detect_legs_ignores_dropout_without_heading_flip():
+    # single NE leg with a big time gap mid-leg but NO heading change
+    lat, lon, t = _synthetic_track(100, [45.0])
+    t = t.copy()
+    t[50:] += 200.0   # a large gap that doesn't coincide with a turn
+    leg_id = detect_legs(lat, lon, t)
+    assert leg_id.max() + 1 == 1, "a time gap without a heading reversal must not split a leg"
+
+
+def test_detect_legs_merges_tiny_legs():
+    # NE, SW, NE with the middle leg far too short to be real (stray point at a turn)
+    lat, lon, t = _synthetic_track(60, [45.0, 225.0, 45.0])
+    # shrink the middle leg to 2 points
+    lat = np.concatenate([lat[:60], lat[60:62], lat[120:]])
+    lon = np.concatenate([lon[:60], lon[60:62], lon[120:]])
+    t = np.concatenate([t[:60], t[60:62], t[120:] - (t[120] - t[62] - 5)])
+    leg_id = detect_legs(lat, lon, t, min_leg_size=10)
+    assert leg_id.max() + 1 == 2, "the 2-point middle leg should be merged into its neighbor"
+
+
+def test_fit_leg_offsets_recovers_known_offsets():
+    rng = np.random.default_rng(70)
+    n_per_leg = 200
+    true_offsets = [0.02, -0.03, 0.05]
+    leg_id = np.repeat(np.arange(3), n_per_leg)
+    # legs well separated in time (30 min apart), so precision (many points,
+    # tiny noise variance) dominates the GP prior and each is recovered ~independently
+    leg_time = np.repeat([0.0, 1800.0, 3600.0], n_per_leg)
+    plane_background = np.full(leg_id.shape, 2.0)
+    resid_noise = 0.003 * rng.standard_normal(leg_id.shape)
+    offset_true = np.array(true_offsets)[leg_id]
+    value = plane_background + offset_true + resid_noise
+    fitted = fit_leg_offsets(value, plane_background, leg_id, leg_time, quantile=0.5)
+    for k, true_off in enumerate(true_offsets):
+        est = fitted[leg_id == k][0]
+        assert abs(est - true_off) < 0.01, (k, est, true_off)
+
+
+def test_fit_leg_offsets_pulls_sparse_leg_toward_neighbors():
+    rng = np.random.default_rng(71)
+    # two well-sampled legs at the same true offset (0.05), flanking a sparse
+    # (2-point) leg close in time whose raw sample happens to read very differently
+    leg_id = np.concatenate([np.zeros(200, dtype=int), np.ones(2, dtype=int), np.full(200, 2, dtype=int)])
+    leg_time = np.concatenate([np.full(200, 0.0), [300.0, 300.0], np.full(200, 600.0)])
+    plane_background = np.zeros(leg_id.shape)
+    value = np.concatenate([
+        0.05 + 0.003 * rng.standard_normal(200),
+        [0.15, 0.16],           # a noisy, unrepresentative raw read from only 2 points
+        0.05 + 0.003 * rng.standard_normal(200),
+    ])
+    fitted = fit_leg_offsets(value, plane_background, leg_id, leg_time, quantile=0.5)
+    flank = fitted[leg_id == 0][0]
+    sparse = fitted[leg_id == 1][0]
+    # the sparse (n=2) leg's raw estimate (~0.155) is pulled sharply toward its
+    # well-sampled, time-adjacent neighbors' consensus (~0.05): its variance is
+    # inflated toward the prior scale by the reliability-gap term (n << 15),
+    # so the GP prior -- not its own noisy 2-point read -- dominates
+    assert abs(flank - 0.05) < 0.01
+    assert sparse < 0.10, f"sparse leg should be pulled toward its neighbors, got {sparse}"
+    assert sparse > flank, "some pull from its own (higher) raw read should remain"
 
 
 def _run_all():
