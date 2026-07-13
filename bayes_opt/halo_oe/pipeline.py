@@ -42,7 +42,7 @@ from adapters.scaling_blocks import category_blocks, offset_block
 
 from .obs_error import build_obs_error_covariance
 
-from .background import receptor_background
+from .background import flag_footprint_discontinuities, receptor_background
 from .buffer import build_buffer
 from .decomposition import (
     assemble_category_scalar_state,
@@ -81,6 +81,7 @@ class InversionContext:
     flight_index: np.ndarray | None = None             # flight number per observation
     buffer: object = None                              # halo_oe.buffer.Buffer, or None
     buffer_op: object = None                           # forward operator for the buffer block
+    discontinuity_mask: np.ndarray | None = None        # bool per receptor; True = drop (leg-edge footprint QC)
 
     @property
     def n_flights(self) -> int:
@@ -143,8 +144,8 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
     components = cfg.get("observations", "error_model", default="simple") == "components"
 
     grid = core = priors = buffer = None
-    jfs, bases, buf_bases, backgrounds, bg_offsets, zs, raws, Rs, flight_ids, flight_index = \
-        [], [], [], [], [], [], [], [], [], []
+    jfs, bases, buf_bases, backgrounds, bg_offsets, zs, raws, Rs, flight_ids, flight_index, disc_masks = \
+        [], [], [], [], [], [], [], [], [], [], []
     for fi, (fid, path) in enumerate(paths):
         jf = JacobianFile(path)
         if grid is None:
@@ -166,6 +167,7 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
             base_f = jf.operator(active=core.active, in_memory=in_memory, row_chunk=row_chunk)
         sens = base_f.matvec(np.ones(core.n_active))
         bg_f, bg_offset_f = receptor_background(jf, cfg, domain_sensitivity=sens, fid=fid)
+        disc_masks.append(flag_footprint_discontinuities(jf, cfg, fid=fid))
         obs_f = build_observations(jf.receptor_obs, error_stddev=error_stddev,
                                    baseline=bg_f, error_inflation=inflation)
         R_f = (build_obs_error_covariance(jf.receptor_lat, jf.receptor_lon, cfg)
@@ -186,7 +188,8 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
     obs = Observations(z=np.concatenate(zs), R=R,
                        raw=np.concatenate(raws), baseline=background)
     return InversionContext(cfg, grid, core, base, background, background_offset, obs, priors,
-                            jfs, flight_ids, np.concatenate(flight_index), buffer, buffer_op)
+                            jfs, flight_ids, np.concatenate(flight_index), buffer, buffer_op,
+                            np.concatenate(disc_masks))
 
 
 def _offset_pieces(cfg, flight_index):
@@ -241,25 +244,38 @@ def _finalize(problem, posterior, n_outliers=0):
     return diagnostics
 
 
-def _solve_with_qc(problem, cfg):
+def _solve_with_qc(problem, cfg, pre_mask=None):
     """Solve, optionally rejecting outlier observations and re-solving.
 
-    Controlled by ``[observations]``: ``outlier_threshold`` (0 = off), ``outlier_kind``
-    (``innovation`` (default) => normalized by the full expected mismatch
-    ``H Sa Hᵀ + R`` — the proper gross-error check; ``posterior`` => residual
-    relative to ``R`` only), and ``outlier_iterations``. Returns
-    ``(problem, posterior, n_flagged)``; the returned problem is the reduced one,
-    so diagnostics reflect the kept data.
+    ``pre_mask`` (optional, per original observation) drops receptors
+    unconditionally before the first solve — structural QC (e.g. leg-edge
+    footprint-discontinuity flags, see :func:`halo_oe.background.
+    flag_footprint_discontinuities`) that says the *operator* is untrustworthy
+    there, independent of how well any fit matches. Applied before, and
+    regardless of, the residual-based outlier check below.
+
+    That residual check is controlled by ``[observations]``: ``outlier_threshold``
+    (0 = off), ``outlier_kind`` (``innovation`` (default) => normalized by the
+    full expected mismatch ``H Sa Hᵀ + R`` — the proper gross-error check;
+    ``posterior`` => residual relative to ``R`` only), and ``outlier_iterations``.
+    Returns ``(problem, posterior, n_flagged)``; the returned problem is the
+    reduced one, so diagnostics reflect the kept data. ``n_flagged`` combines
+    both ``pre_mask`` drops and residual-based outliers.
     """
-    posterior = solve(problem)
     n0 = problem.n_obs
     flagged = np.zeros(n0, dtype=bool)          # over the ORIGINAL observations
+    if pre_mask is not None:
+        pre_mask = np.asarray(pre_mask, dtype=bool)
+        if pre_mask.any():
+            flagged |= pre_mask
+            problem = subset_observations(problem, ~pre_mask)
+    posterior = solve(problem)
     threshold = cfg.get_float("observations", "outlier_threshold", default=0.0)
     if not threshold or threshold <= 0:
         return problem, posterior, flagged
     kind = cfg.get("observations", "outlier_kind", default="innovation")
     max_iter = cfg.get_int("observations", "outlier_iterations", default=2)
-    kept = np.arange(n0)                         # original indices still in the problem
+    kept = np.nonzero(~flagged)[0]                # original indices still in the problem
     for _ in range(max(1, max_iter)):
         mask, _ = flag_outliers(problem, posterior=posterior, threshold=threshold, kind=kind)
         if not mask.any():
@@ -331,7 +347,7 @@ def invert(
                                 for b in state.blocks if b.name not in buffer_xa}, **buffer_xa)
         problem = GaussianLinearProblem(H=state.block_column(operators), z=ctx.obs.z,
                                         xa=xa, Sa=Sa, R=ctx.obs.R)
-        problem, posterior, flagged = _solve_with_qc(problem, cfg)
+        problem, posterior, flagged = _solve_with_qc(problem, cfg, pre_mask=ctx.discontinuity_mask)
         report = decompose_solved_categories(
             posterior, state, core, group_active, ctx.grid, names,
             unit_scale=unit_scale, unit_label=unit_label)
@@ -353,7 +369,7 @@ def invert(
                             for b in state.blocks if b.name not in buffer_xa}, **buffer_xa)
         problem = GaussianLinearProblem(H=state.block_column(operators), z=ctx.obs.z,
                                         xa=xa, Sa=Sa, R=ctx.obs.R)
-        problem, posterior, flagged = _solve_with_qc(problem, cfg)
+        problem, posterior, flagged = _solve_with_qc(problem, cfg, pre_mask=ctx.discontinuity_mask)
         # sub-categories of ONE inventory are additive -> a total row is valid
         report = estimate_fluxes(posterior, state, core, group_fields, ctx.grid,
                                  prior_state=xa, unit_scale=unit_scale,
@@ -380,7 +396,7 @@ def invert(
                             for b in state.blocks if b.name not in buffer_xa}, **buffer_xa)
     problem = GaussianLinearProblem(H=state.block_column(operators), z=ctx.obs.z,
                                     xa=xa, Sa=Sa, R=ctx.obs.R)
-    problem, posterior, flagged = _solve_with_qc(problem, cfg)
+    problem, posterior, flagged = _solve_with_qc(problem, cfg, pre_mask=ctx.discontinuity_mask)
     diagnostics = _finalize(problem, posterior, int(flagged.sum()))
 
     if decompose:  # method == "partition"

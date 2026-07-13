@@ -22,6 +22,7 @@ from halo_oe.background import (  # noqa: E402
     constant_background, polynomial_design, fit_lower_envelope_surface,
     flight_background, receptor_background, domain_insensitive_mask,
     detect_legs, fit_leg_offsets,
+    flag_leg_edge_discontinuities, flag_footprint_discontinuities,
 )
 
 
@@ -84,6 +85,24 @@ class _FakeJac:
     def __init__(self, lat, lon, obs):
         self.receptor_lat, self.receptor_lon, self.receptor_obs = lat, lon, obs
         self.n_receptors = len(obs)
+
+
+class _FakeJacVar:
+    """Mimics a netCDF4 Variable: supports ``var[i, :, :]`` row indexing."""
+    def __init__(self, arr):
+        self._arr = arr
+    def __getitem__(self, key):
+        return self._arr[key]
+
+
+class _FakeDS:
+    def __init__(self, arr, jac_var="jacobian"):
+        self.variables = {jac_var: _FakeJacVar(arr)}
+
+
+def _gaussian_footprint(ny, nx, cy, cx, sigma=2.0):
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    return np.exp(-(((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * sigma ** 2)))
 
 
 class _Cfg:
@@ -256,6 +275,51 @@ def test_fit_leg_offsets_pulls_sparse_leg_toward_neighbors():
     assert abs(flank - 0.05) < 0.01
     assert sparse < 0.10, f"sparse leg should be pulled toward its neighbors, got {sparse}"
     assert sparse > flank, "some pull from its own (higher) raw read should remain"
+
+
+def test_flag_leg_edge_discontinuities_flags_corrupted_edge():
+    ny, nx, n_per_leg = 20, 20, 12
+    footprints = np.zeros((2 * n_per_leg, ny, nx))
+    for i in range(n_per_leg):                                    # leg 0: smooth sweep
+        footprints[i] = _gaussian_footprint(ny, nx, cy=5, cx=2 + i)
+    for i in range(n_per_leg):                                    # leg 1: smooth sweep
+        footprints[n_per_leg + i] = _gaussian_footprint(ny, nx, cy=15, cx=2 + i)
+    # corrupt only the LAST point of leg 0: a footprint at an unrelated location,
+    # as if that release point's back-trajectory was still shaped by the turn
+    footprints[n_per_leg - 1] = _gaussian_footprint(ny, nx, cy=0, cx=19)
+
+    leg_id = np.array([0] * n_per_leg + [1] * n_per_leg)
+    jf = _FakeJac(np.zeros(2 * n_per_leg), np.zeros(2 * n_per_leg), np.zeros(2 * n_per_leg))
+    jf._ds = _FakeDS(footprints)
+    jf._jac_var = "jacobian"
+
+    flag = flag_leg_edge_discontinuities(jf, leg_id, relative_threshold=0.5, min_leg_size=6)
+    assert flag[n_per_leg - 1], "the corrupted leg-end receptor must be flagged"
+    assert flag.sum() == 1, f"only the corrupted receptor should be flagged, got {flag.sum()}"
+
+
+def test_flag_leg_edge_discontinuities_clean_legs_unflagged():
+    ny, nx, n_per_leg = 20, 20, 12
+    footprints = np.zeros((2 * n_per_leg, ny, nx))
+    for i in range(n_per_leg):
+        footprints[i] = _gaussian_footprint(ny, nx, cy=5, cx=2 + i)
+    for i in range(n_per_leg):
+        footprints[n_per_leg + i] = _gaussian_footprint(ny, nx, cy=15, cx=2 + i)
+
+    leg_id = np.array([0] * n_per_leg + [1] * n_per_leg)
+    jf = _FakeJac(np.zeros(2 * n_per_leg), np.zeros(2 * n_per_leg), np.zeros(2 * n_per_leg))
+    jf._ds = _FakeDS(footprints)
+    jf._jac_var = "jacobian"
+
+    flag = flag_leg_edge_discontinuities(jf, leg_id, relative_threshold=0.5, min_leg_size=6)
+    assert not flag.any(), "smooth, uncorrupted legs must not be flagged"
+
+
+def test_flag_footprint_discontinuities_default_off():
+    jf = _FakeJac(np.zeros(5), np.zeros(5), np.zeros(5))
+    flag = flag_footprint_discontinuities(jf, _Cfg({}))
+    assert flag.shape == (5,)
+    assert not flag.any()
 
 
 def _run_all():

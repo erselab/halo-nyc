@@ -64,6 +64,8 @@ __all__ = [
     "domain_insensitive_mask",
     "detect_legs",
     "fit_leg_offsets",
+    "flag_leg_edge_discontinuities",
+    "flag_footprint_discontinuities",
     "receptor_background",
 ]
 
@@ -262,6 +264,102 @@ def detect_legs(
     for k in range(len(merged) - 1):
         leg_id[merged[k]:merged[k + 1]] = k
     return leg_id
+
+
+def _footprint_cosine(row_a: np.ndarray, row_b: np.ndarray) -> float:
+    a = np.nan_to_num(np.asarray(row_a, dtype=float).ravel(), nan=0.0)
+    b = np.nan_to_num(np.asarray(row_b, dtype=float).ravel(), nan=0.0)
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na == 0.0 or nb == 0.0:
+        return np.nan
+    return float(a @ b) / (na * nb)
+
+
+def flag_leg_edge_discontinuities(
+    jacobian_file,
+    leg_id: np.ndarray,
+    relative_threshold: float = 0.5,
+    min_leg_size: int = 6,
+) -> np.ndarray:
+    """Flag leg-start/leg-end receptors whose footprint breaks from their leg.
+
+    A survey leg is flown straight and level, so consecutive receptors' full
+    (unmasked) footprints should stay strongly self-similar within a leg — the
+    within-leg pair at the middle of each leg sets that leg's own baseline
+    similarity. The first and last receptor of a leg are release points right
+    after / right before a turn, so occasionally the back-trajectory for that
+    single bin is still shaped by the turn rather than the leg's steady flight
+    (bank angle, brief altitude change, a different meteorological sample at
+    release time): its footprint can differ sharply even from its immediate,
+    seconds-away neighbor, unlike every other consecutive pair in the leg. Such
+    a receptor's modeled sensitivity is unreliable independent of the emission
+    field, so it is a candidate to exclude from the solve rather than downweight
+    via the ordinary residual-based outlier check (which only sees whether the
+    *fit* is bad, not whether the *operator* itself is trustworthy there).
+
+    Compares the leg's first-vs-second and second-to-last-vs-last footprint
+    cosine similarity against a same-leg interior baseline (a middle pair); an
+    edge pair less than ``relative_threshold`` times that baseline flags the
+    outer receptor of the pair. Legs shorter than ``min_leg_size`` are skipped
+    (too few points for a stable interior baseline).
+
+    Reads footprint rows directly off ``jacobian_file`` (full lat/lon grid, not
+    masked to the core) via single-row indexing, so only a handful of rows per
+    leg are ever materialized regardless of file size.
+    """
+    n = jacobian_file.n_receptors
+    flag = np.zeros(n, dtype=bool)
+    jac = jacobian_file._ds.variables[jacobian_file._jac_var]
+    leg_id = np.asarray(leg_id)
+
+    for lid in np.unique(leg_id):
+        members = np.nonzero(leg_id == lid)[0]
+        if len(members) < min_leg_size:
+            continue
+        mid = len(members) // 2
+        cos_interior = _footprint_cosine(jac[members[mid], :, :], jac[members[mid + 1], :, :])
+        if not np.isfinite(cos_interior) or cos_interior <= 0:
+            continue
+        cos_start = _footprint_cosine(jac[members[0], :, :], jac[members[1], :, :])
+        if cos_start < relative_threshold * cos_interior:
+            flag[members[0]] = True
+        cos_end = _footprint_cosine(jac[members[-2], :, :], jac[members[-1], :, :])
+        if cos_end < relative_threshold * cos_interior:
+            flag[members[-1]] = True
+    return flag
+
+
+def flag_footprint_discontinuities(jacobian_file, config, fid: str | None = None) -> np.ndarray:
+    """Per-receptor discontinuity-QC mask, or all-``False`` when disabled.
+
+    Reads ``[background] flag_footprint_discontinuities`` (default ``False``);
+    when enabled, detects legs the same way :func:`receptor_background` does
+    for ``use_leg_offsets`` (needs ``fid`` and ``flight_data_dir`` to recover
+    real elapsed time) and applies :func:`flag_leg_edge_discontinuities` with
+    ``discontinuity_relative_threshold`` / ``discontinuity_min_leg_size``.
+    Independent of ``use_leg_offsets`` — this is a hard exclusion candidate for
+    the solve, not a background correction.
+    """
+    n = jacobian_file.n_receptors
+    if not config.get_bool("background", "flag_footprint_discontinuities", default=False):
+        return np.zeros(n, dtype=bool)
+    if fid is None:
+        raise ValueError("[background] flag_footprint_discontinuities is enabled but no flight id was given")
+    lat = jacobian_file.receptor_lat
+    lon = jacobian_file.receptor_lon
+    flight_data_dir = config.get("background", "flight_data_dir")
+    time_s = _load_receptor_time(fid, flight_data_dir, lat, lon)
+    leg_id = detect_legs(
+        lat, lon, time_s,
+        gap_seconds=config.get_float("background", "leg_gap_seconds", default=8.0),
+        min_leg_size=config.get_int("background", "leg_min_size", default=10),
+        axis_deg=config.get_float("background", "leg_axis_deg", default=45.0),
+    )
+    return flag_leg_edge_discontinuities(
+        jacobian_file, leg_id,
+        relative_threshold=config.get_float("background", "discontinuity_relative_threshold", default=0.5),
+        min_leg_size=config.get_int("background", "discontinuity_min_leg_size", default=6),
+    )
 
 
 def fit_leg_offsets(

@@ -170,6 +170,41 @@ def _flights_present(flight_ids, flight_index):
     return [(fid, flight_index == f) for f, fid in enumerate(flight_ids) if (flight_index == f).any()]
 
 
+def _time_binned_autocorr(r, t, max_lag_s=180.0, bin_width_s=5.0):
+    """Residual autocorrelation binned by real elapsed-time lag, not sample index.
+
+    Sample spacing is not uniform: within a leg it is a near-constant ~4-5s,
+    but consecutive *samples* straddling a turn are minutes apart (see
+    :func:`halo_oe.background.detect_legs`). An index-lag ACF silently treats
+    both cases as "lag 1", which understates how quickly correlation actually
+    decays along a leg and contaminates small lags with turn-adjacent pairs
+    that have nothing to do with along-track correlation length. Binning by
+    ``t[j] - t[i]`` instead keeps those turn-spanning pairs in their own
+    (large, sparse) bins where they belong.
+
+    ``r`` must already be standardized (zero mean, unit variance) and ``t``
+    sorted ascending, same length, same order. Returns ``(lag_centers_s, ac)``
+    with ``lag_centers_s`` starting at 0 (a synthetic, definitional 1.0, as is
+    conventional for an ACF plot) followed by the real bins out to
+    ``max_lag_s``; bins with no pairs are NaN.
+    """
+    n = len(r)
+    nbins = max(1, int(np.ceil(max_lag_s / bin_width_s)))
+    edges = np.linspace(0.0, max_lag_s, nbins + 1)
+    sums = np.zeros(nbins)
+    counts = np.zeros(nbins, dtype=int)
+    for i in range(n):
+        j = i + 1
+        while j < n and t[j] - t[i] <= max_lag_s:
+            b = min(int((t[j] - t[i]) / bin_width_s), nbins - 1)
+            sums[b] += r[i] * r[j]
+            counts[b] += 1
+            j += 1
+    ac = np.divide(sums, counts, out=np.full(nbins, np.nan), where=counts > 0)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    return np.concatenate([[0.0], centers]), np.concatenate([[1.0], ac])
+
+
 def _residual_map_row(ax_row, fid, rlat, rlon, z, modeled, resid, flag, show_titles) -> None:
     """One flight's spatial maps (enhancement / modeled / residual) into a row of axes."""
     for a, (title, val, cmap) in zip(ax_row, [('enhancement z', z, 'viridis'),
@@ -186,10 +221,17 @@ def _residual_map_row(ax_row, fid, rlat, rlon, z, modeled, resid, flag, show_tit
     ax_row[0].set_ylabel(f'flight {fid}\nlat')
 
 
-def _mismatch_diagnostics_row(ax_row, fid, modeled, resid, fin, show_titles) -> None:
+def _mismatch_diagnostics_row(ax_row, fid, modeled, resid, fin, show_titles, t=None) -> None:
     """One flight's normalized-residual histogram, residual-vs-modeled, and
     along-track autocorrelation into a row of axes (mirrors the notebook's
-    mismatch section)."""
+    mismatch section).
+
+    ``t``, if given, is this flight's per-receptor elapsed time (seconds,
+    same length/order as ``modeled``/``resid``); the autocorrelation panel
+    then bins by real time lag (see :func:`_time_binned_autocorr`) instead of
+    assuming uniform sample spacing. Falls back to sample-index lag when
+    unavailable (e.g. no ``flight_data_dir`` configured for this bundle).
+    """
     med = np.median(resid[fin])
     sigma_mad = 1.4826 * np.median(np.abs(resid[fin] - med))
     nresid = (resid - med) / sigma_mad
@@ -209,16 +251,24 @@ def _mismatch_diagnostics_row(ax_row, fid, modeled, resid, fin, show_titles) -> 
     ax_row[1].set_xlabel('modeled enhancement (ppm)'); ax_row[1].set_ylabel('residual (ppm)')
     if show_titles:
         ax_row[1].set_title('residual vs modeled')
-    # (c) along-track autocorrelation (index order ~ track) within this flight
+    # (c) along-track autocorrelation within this flight, by real time lag when
+    # available (see _time_binned_autocorr), else by sample-index lag
     r = resid[fin]
     r = (r - r.mean()) / (r.std() + 1e-12)
-    maxlag = min(40, max(2, r.size - 1))
-    ac = np.array([1.0 if k == 0 else float(np.mean(r[:-k] * r[k:])) for k in range(maxlag)])
-    ax_row[2].stem(range(maxlag), ac)
+    if t is not None:
+        lags, ac = _time_binned_autocorr(r, t[fin])
+        keep = np.isfinite(ac)
+        ax_row[2].stem(lags[keep], ac[keep])
+        xlabel = 'time lag (s)'
+    else:
+        maxlag = min(40, max(2, r.size - 1))
+        ac = np.array([1.0 if k == 0 else float(np.mean(r[:-k] * r[k:])) for k in range(maxlag)])
+        ax_row[2].stem(range(maxlag), ac)
+        xlabel = 'receptor-index lag'
     ax_row[2].axhline(0, color='k', lw=1)
     for h in (1, -1):
         ax_row[2].axhline(h * 1.96 / np.sqrt(r.size), color='r', ls=':', lw=1)
-    ax_row[2].set_xlabel('receptor-index lag'); ax_row[2].set_ylabel('autocorr')
+    ax_row[2].set_xlabel(xlabel); ax_row[2].set_ylabel('autocorr')
     if show_titles:
         ax_row[2].set_title('residual autocorrelation')
 
@@ -248,6 +298,23 @@ def plot_residuals(bundle_dir: str, out_path: str = None) -> None:
     chi2r = inv.diagnostics.get('reduced_chi_square', float('nan'))
     print(f'reduced chi-square (saved): {chi2r:.3f}   (~1 = error model consistent)')
 
+    # elapsed time per flight, for a real time-lag autocorrelation axis (falls
+    # back to sample-index lag per flight if flight_data_dir isn't configured
+    # or a flight's raw file/coordinates aren't available)
+    flight_data_dir = None
+    cfg_path = os.path.join(bundle_dir, 'config.ini')
+    if os.path.exists(cfg_path):
+        from goe.config import Config
+        flight_data_dir = Config(cfg_path).get('background', 'flight_data_dir', default=None)
+    times = {}
+    if flight_data_dir:
+        from .background import _load_receptor_time
+        for fid, sel in sels:
+            try:
+                times[fid] = _load_receptor_time(fid, flight_data_dir, rlat[sel], rlon[sel])
+            except (FileNotFoundError, ValueError) as e:
+                print(f'  flight {fid}: no elapsed time for autocorrelation ({e}); using index lag')
+
     fig, ax = plt.subplots(n, 3, figsize=(16, 4.2 * n), constrained_layout=True, squeeze=False)
     for i, (fid, sel) in enumerate(sels):
         _residual_map_row(ax[i], fid, rlat[sel], rlon[sel], z[sel], modeled[sel], resid[sel],
@@ -262,7 +329,8 @@ def plot_residuals(bundle_dir: str, out_path: str = None) -> None:
     fig, ax = plt.subplots(n, 3, figsize=(16, 4.2 * n), constrained_layout=True, squeeze=False)
     for i, (fid, sel) in enumerate(sels):
         fin = np.isfinite(resid[sel]) & ~flag[sel]
-        _mismatch_diagnostics_row(ax[i], fid, modeled[sel], resid[sel], fin, show_titles=(i == 0))
+        _mismatch_diagnostics_row(ax[i], fid, modeled[sel], resid[sel], fin, show_titles=(i == 0),
+                                   t=times.get(fid))
     fig.suptitle('Model-data mismatch by flight')
     if out_path:
         plt.savefig(os.path.join(out_path, 'residuals_autocorr.png'), bbox_inches='tight')
