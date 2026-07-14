@@ -223,7 +223,7 @@ new script, `dipole_diagnostic.py` (plots: `runs/dipole_diagnostic_
 <flight>_cluster<n>.png`).
 
 **Two method bugs surfaced and were fixed before trusting any result** —
-consistent with §12.6's rule that a surprising, consequential diagnostic
+consistent with §14.6's rule that a surprising, consequential diagnostic
 finding needs independent verification before being reported:
 
 1. Connected-component clustering of flagged residual bins initially used
@@ -254,7 +254,7 @@ finding needs independent verification before being reported:
   cluster (centroid ≈ 40.51, −74.14) has essentially **zero prior mass in
   all four categories** — the same "no degrees of freedom to produce signal
   with" signature as `728_1`'s residual, and a candidate for the same
-  alternative-inventory comparison recommended there (§13.1).
+  alternative-inventory comparison recommended there (§15.1).
 
 - **`20230805`, `20230809`**: the dominant pattern here is visually
   different from `726_1`/`728_1`/`728_2` — not one or two broad gradients,
@@ -365,7 +365,7 @@ dip (unexplained, footprint-shape already ruled out).
   this measure, so the mechanism doesn't fit them.
 - `726_1`'s still-unexplained dip is the *most* concentrated location checked
   (0.94 at 5km) — the opposite of diffuse, consistent with it needing a
-  different explanation entirely (as §13.2's suggestion for `726_1`'s dip
+  different explanation entirely (as §15.2's suggestion for `726_1`'s dip
   already assumed).
 - Visually (`runs/diffuse_prior_overview.png`), low concentration (~0.4–0.6)
   is the **norm** across most of the rural/inland domain, not a rare property
@@ -383,7 +383,146 @@ a general answer to "why do these residuals persist," but worth keeping in
 mind alongside the correlation-length limit (§9) as a compounding factor
 where it does co-occur with low concentration.
 
-## 12. Major takeaways
+## 12. Testing the leg-offset oversmoothing hypothesis for `805`/`809`
+
+§9 reframed `805`/`809` as background-side, not prior-side, and §15.4
+proposed the specific mechanism: maybe `fit_leg_offsets`'s GP
+(`leg_correlation_time_s = 600s`) oversmooths a real, faster-varying
+per-leg background signal. Tested directly (script: `leg_offset_check.py`,
+no re-solve): re-derived `fit_leg_offsets`'s internal raw (pre-GP) per-leg
+quantile estimate — exposing an intermediate value the production function
+doesn't return — using data already in the bundle (`receptor_background` −
+`receptor_background_offset` recovers the plane-only background;
+`receptor_obs` the raw observation) plus one honest `fit_mask` re-derivation
+per flight (`JacobianFile.receptor_column_sums`, the same cheap streamed
+call used twice already in this investigation) and one small `flight_data/
+*.h5` read per flight for elapsed time. The re-implementation was verified
+exact: the re-derived GP-smoothed offset matched the bundle's saved
+`receptor_background_offset` to 1e-17.
+
+**Result: the oversmoothing hypothesis is not supported.** `raw` and
+`smooth` are essentially identical for both flights — for `809`, `raw −
+smooth` is ~10⁻⁵ ppm on *every* leg (all 10 legs are well-sampled, 31–149
+eligible points, comfortably above `min_reliable_points=15`, so the GP has
+little to pull toward neighbors); `805` matches closely too, with the one
+exception being its first leg (0 eligible points, correctly filled in
+entirely from neighbors — that's the estimator working as designed, not a
+bug). A shorter `leg_correlation_time_s` would barely change the applied
+correction, since there is essentially nothing being smoothed away.
+
+**But a real leg-to-leg oscillation survives anyway**, even restricted to
+the domain-insensitive ("clean air") receptors whose final residual isn't
+confounded by flux-fitting: ±0.006 ppm (`805`) to ±0.013 ppm (`809`) across
+legs (`runs/leg_offset_check_20230805.png`, `..._20230809.png`). Since `raw
+≈ smooth` already, this isn't a good correction that got smoothed away —
+the per-leg-constant quantile estimator itself never captured it, at any
+smoothing setting. **This corroborates §4.2's earlier, independently-derived
+finding** (continuous per-receptor kriging also plateaued regardless of
+correlation length, 0.05°–10°) — two different methods (aggregate
+receptor-level kriging vs. this leg-level, flight-specific check) converge
+on the same conclusion: background modeling, in every form tried (plane,
+per-leg constant, continuous kriging), has a real ceiling on these flights
+that tuning a smoothing parameter further won't cross.
+
+Leg segmentation itself looks reasonable for both flights (10 legs each;
+`runs/leg_segmentation_20230805.png` shows 8+ clean parallel lines;
+`runs/leg_segmentation_20230809.png` shows what looks like legs revisiting
+similar geography at different times — the exact scenario §2.2's per-leg
+offset was built for, not an obvious segmentation bug, though a
+time-ordered check would be needed to be fully certain).
+
+**Verdict:** the background-side lead for `805`/`809` is now exhausted —
+every background-model variant tried (plane, per-leg constant at any
+smoothing setting, continuous kriging) plateaus at the same real, localized
+residual. The next step for these two flights should shift back to
+prior-shape/correlation-length territory (as already done for `728_2` in
+§9), not further background tuning.
+
+## 13. Along-track resolved-scale check: observed vs. modeled variability
+
+A systematic version of §7's one-off gradient-sharpness comparison (which
+only checked a single `726_1` hotspot/dip pair): if background varies
+slowly, comparing the along-track variability of the observed enhancement
+`z` to the modeled `Hx̂` directly measures the scale below which the model
+stops resolving real structure — without needing a specific known feature to
+anchor on. Checked (script: `along_track_scale_check.py`, no re-solve) with
+two real-elapsed-time-lag-binned statistics, computed per flight and pooled:
+the along-track **autocorrelation** (reusing `plotting._time_binned_autocorr`
+as-is) and the along-track **structure function** `D(τ) = ⟨(x(t+τ)−x(t))²⟩`
+(new, same binning). A noise-floor control — the same structure function
+computed on `z` restricted to the domain-insensitive (`fit_mask`)
+receptors — separates real signal from the background-fitting noise §12
+already found leaking into "clean" receptors.
+
+**Autocorrelation: an initial visual read overclaimed a clean split, and a
+follow-up numeric check (script: `along_track_acf_quant.py`) corrected it —
+another instance of §14.6's rule.** The first pass eyeballed the six panels
+and reported `805`, `809`, `728_1` all showing `Hx̂` decorrelating more
+slowly than `z` (the transport-under-resolution signature), with
+`726_1`/`726_2`/`728_2` not. Tabulating the actual signed gap
+(`ac_modeled − ac_z`) per lag bin instead of reading the plot did not
+support that split:
+
+| flight | mean gap, lag≤30s | mean gap, lag>30s | pattern |
+|---|---|---|---|
+| `805` | +0.17 | +0.27 | strong, consistent positive gap at every lag |
+| `726_2` | +0.17 | +0.18 | equally strong positive gap — **same sign and magnitude as `805`**, despite being an already-explained flight |
+| `809` | +0.02 | +0.09 | weak positive, only past ~12s |
+| `728_2` | −0.02 | −0.11 | near zero at short lag, mildly negative at long lag |
+| `728_1` | −0.17 | −0.17 | consistent *negative* gap — opposite sign from what was claimed |
+| `726_1` | −0.15 | −0.26 | consistent negative gap, growing with lag — opposite sign |
+
+Only `805` is an unambiguous, strong match for the transport-under-resolution
+signature at every lag. `809` matches weakly. `726_2` — already fully
+explained by leg-offset correction (§3) — shows a gap of the same sign and
+magnitude as `805`, and `728_1` (one of the flights the first pass claimed
+*did* show the signature) actually shows the opposite sign, matching
+`726_1`. **The split does not track the known good/bad flight split at all**
+and should not have been generalized from a plot impression.
+
+A likely confound: the ACF normalizes by each series' own variance, and
+`Hx̂` is often very flat (low true variance) except where real flux signal
+exists — how much real structure a flight's footprints happened to see
+varies a lot flight-to-flight, which can destabilize a low-variance series'
+standardized autocorrelation in a way unrelated to "is the model too
+smooth." This plausibly explains why the sign flips without tracking flight
+quality, though it wasn't tested directly.
+
+**The structure function has the same amplitude-dominance problem as
+before, and is not a safe substitute for the (also-flawed) ACF here.**
+`D(τ)` is in absolute (ppm²) units, and `Hx̂`'s overall magnitude is much
+smaller than `z`'s throughout this whole investigation (every residual
+map's modeled colorbar has been visibly narrower than its enhancement
+colorbar) — so `D_modeled ≈ 0` at every lag mostly just re-states that known
+amplitude gap, not a scale/resolution difference. More surprising: pooled
+and per-flight, `D_z` (all receptors) and the `fit_mask`-only noise-floor
+control are **nearly indistinguishable** at every lag, for every flight
+(`runs/along_track_structure*.png`) — i.e., at the whole-flight pooled
+level, observed along-track variability doesn't show excess structure
+attributable to real plume signal beyond the background noise floor. That's
+most likely a dilution effect (most receptors on a long track are far from
+any point source at any given moment, so a flight-wide average swamps the
+localized moments with real signal) rather than evidence there's no real
+fine-scale plume structure — but this test, as built, can't distinguish
+those two explanations. A targeted version restricted to the
+domain-*sensitive* (plume-affected) receptors specifically, rather than
+pooled over the whole flight, would be the natural follow-up for both
+statistics if this angle is revisited — neither tool as currently built
+cleanly isolates "real signal at a given scale" from "how much true
+variance this series happens to have."
+
+**Verdict:** weaker than first reported. `805` alone has a clean, strong,
+lag-consistent along-track signature matching transport under-resolution;
+`809` matches weakly; the rest of the six-flight split does not hold up
+against the quantitative check and should not be treated as established.
+This still sharpens §7's hypothesis for `805` specifically beyond the single
+hand-picked `726_1` pair it was first tested on, but does **not** extend it
+to `809`/`728_1` as a group the way first claimed. The lesson about
+over-trusting a plot (§14.6) applied to this investigation's own new work,
+not just historical cases — worth remembering the next time a multi-panel
+comparison looks clean at a glance.
+
+## 14. Major takeaways
 
 1. The residual structure left after MDM tuning is real and systematic, not
    noise — proven via cross-config stability, not assumed.
@@ -432,8 +571,33 @@ where it does co-occur with low concentration.
     not `728_2` or `809`'s cluster0. A mechanism being real and demonstrable
     doesn't mean it's *the* explanation for every open case — check each
     location rather than assuming a plausible story generalizes.
+12. Item 9's "pointing back at background/leg-offset fitting" lead for
+    `805`/`809` was followed through (§12) and closed: the GP applies
+    almost exactly what its own raw per-leg estimate says (`raw ≈ smooth`
+    on every leg), so there was never a meaningful oversmoothing gap to
+    tighten. Background modeling for these two flights is now exhausted —
+    every variant tried (plane, per-leg constant, continuous kriging, §4.2)
+    plateaus at the same real, localized residual. The lead correctly
+    identified *where* to look but the specific mechanism (correlation-time
+    oversmoothing) wasn't it; the useful outcome was ruling the whole
+    background-side avenue out, converging with §4.2's independent ceiling.
+13. The along-track autocorrelation check (§13) was first reported as a
+    clean flight-level split (`805`/`809`/`728_1` vs. the rest) from a plot
+    read, then corrected by tabulating the actual signed gap per lag: only
+    `805` shows a strong, consistent transport-under-resolution signature;
+    `809` weakly; `726_2` (already-explained) shows a gap of the *same sign
+    and size as `805`*, and `728_1` shows the *opposite* sign entirely. The
+    six-flight split doesn't track the known good/bad split and was
+    over-generalized from appearance. Both along-track statistics tried
+    here (ACF and structure function) turned out to have real, different
+    confounds — normalization instability on low-variance series for the
+    ACF, raw-amplitude dominance for the structure function — neither
+    cleanly isolates "real signal at a given scale" as built. The catch
+    itself is the reusable lesson: §14.6's rule applied to this
+    investigation's own new work in the same session it was written, not
+    just to older, already-cited cases.
 
-## 13. Suggestions for future analysis
+## 15. Suggestions for future analysis
 
 1. **`728_1`'s and `728_2`'s zero-prior-mass clusters:** with zero prior mass
    at either residual location in every category, the next step is
@@ -453,13 +617,17 @@ where it does co-occur with low concentration.
    that still show poor residuals (`728_1`/`728_2`/`805`/`809`). If they
    cluster there, it's a small but real contributing factor worth keeping on
    by default; if scattered, it's neutral hygiene with no diagnostic value.
-4. **`805`/`809`'s leg-banding (§9):** unlike the other four flights, the
-   dominant residual pattern here is leg-to-leg alternating sign, not a
-   broad gradient or a localized prior defect. Next step is background-side,
-   not prior-side: re-run `detect_legs`/`fit_leg_offsets` diagnostics
-   (§2.2) specifically for these two flights and check whether legs are
-   segmented correctly and whether the GP's `correlation_time_s` is too long
-   to track a fast boundary-layer change on these particular days.
+4. ~~`805`/`809`'s leg-banding: background-side check~~ **Done, §12 —
+   ruled out.** `raw ≈ smooth` on every leg for both flights, so
+   `correlation_time_s` was never oversmoothing anything; leg segmentation
+   also looked reasonable. Background modeling is exhausted for these two
+   flights. Extending the §5 dipole/prior-mass-overlay diagnostic to their
+   specific alternating-leg locations (only their strongest residual bins
+   were checked in §9, not a full per-leg treatment) is still worth doing.
+   §13's along-track check gives `805` specifically (and `809` more weakly)
+   an additional, distinct lead — see item 7 — but that check did *not*
+   hold up for `728_1` on closer inspection, so treat it as `805`-specific,
+   not a shared `805`/`809`/`728_1` mechanism.
 5. **Reconsider `[category_spatial]` for categories pinned at 0**
    (`landfill`, `wastewater`, `other`): if an unexplained residual location
    turns out to coincide with a landfill/WWTP whose prior location might be
@@ -477,6 +645,9 @@ where it does co-occur with low concentration.
 7. **An explicit footprint-coarsening test** (spatially smooth/coarsen STILT
    footprints to ~3km and see whether that alone reproduces the flat model
    response seen in the gradient-sharpness test) was proposed early on but
-   never run. Still a clean, cheap way to test the transport-resolution
-   hypothesis in general — separate from `726_1`'s dip specifically, which
-   turned out not to be footprint-shape-related.
+   never run. §13's along-track check, after correction, only robustly
+   motivates this for `805` (`809` more weakly) — the initial three-flight
+   grouping with `728_1` did not survive a quantitative check (`728_1`
+   actually showed the opposite-signed gap) and should not be used to scope
+   this test. Separate from `726_1`'s dip specifically, which turned out not
+   to be footprint-shape-related.
