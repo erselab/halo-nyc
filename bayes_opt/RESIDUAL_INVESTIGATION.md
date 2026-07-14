@@ -213,7 +213,71 @@ line of investigation.
   (consistent with the corrected §7.4 finding); `20230726_2` → exactly 3
   flagged, matching the standalone diagnostic's prediction exactly.
 
-## 9. Major takeaways
+## 9. Extending the prior-shape diagnostic to `728_2`, `805`, `809`
+
+The §5 method (residual-cluster identification + per-category prior-mass
+overlay + correlation-length reach) had only been worked through by hand for
+`726_1` and `728_1`. Applied here to the three remaining flights, using the
+leg-offset-corrected 6-flight bundle (`runs/legtest_legoffset_6flight`) and a
+new script, `dipole_diagnostic.py` (plots: `runs/dipole_diagnostic_
+<flight>_cluster<n>.png`).
+
+**Two method bugs surfaced and were fixed before trusting any result** —
+consistent with §10.6's rule that a surprising, consequential diagnostic
+finding needs independent verification before being reported:
+
+1. Connected-component clustering of flagged residual bins initially used
+   4-connectivity (rook adjacency). But this survey flies every leg along a
+   fixed SW/NE diagonal axis (§2.2), so consecutive same-leg bins are
+   *diagonal* neighbors, not rook neighbors. 4-connectivity fragmented one
+   real ~60km streak into a dozen spurious tiny "clusters" with no spatial
+   coherence. Fixed by switching to 8-connectivity.
+2. In `category_fields` mode, each category's *state block* is a
+   **multiplicative scale factor** (prior = 1.0 uniformly for every cell) —
+   the actual flux-density map used for grouping/plotting lives in a
+   separate `group_fields` array with completely different units and scale.
+   A first attempt diffed the state block directly against `group_fields`,
+   producing a spurious uniform "posterior − prior ≈ 1.0" signal everywhere,
+   independent of the real prior's magnitude or shape. The correct posterior
+   flux perturbation is `(scale_factor − 1) × prior_density`.
+
+**Findings, with the honest reach/prior-mass check applied to each cluster:**
+
+- **`20230728_2`**: same character as `728_1` — a broad (~64km) negative
+  cluster and a broad (~46km) positive cluster, both well beyond
+  `natural_gas`'s 5km correlation-length reach. The negative cluster
+  partially overlaps real `natural_gas` prior mass, and the posterior
+  visibly pulled flux down there — but only over roughly the western third
+  of the ~64km feature; the correlation length caps how far that adjustment
+  can extend, leaving the rest of the band unexplained
+  (**correlation-length-limited**, not a missing-prior case). The positive
+  cluster (centroid ≈ 40.51, −74.14) has essentially **zero prior mass in
+  all four categories** — the same "no degrees of freedom to produce signal
+  with" signature as `728_1`'s residual, and a candidate for the same
+  alternative-inventory comparison recommended there (§11.1).
+
+- **`20230805`, `20230809`**: the dominant pattern here is visually
+  different from `726_1`/`728_1`/`728_2` — not one or two broad gradients,
+  but **leg-to-leg alternating-sign banding across nearly the entire
+  flight** (adjacent survey legs biased oppositely; visible by eye in
+  `residuals_map.png`, and this bundle already has per-leg background-offset
+  correction, §2.2, turned on). The strongest localized clusters found
+  within that banding (`805` at ≈40.69, −74.32; `809` at ≈40.72, −74.49 and
+  ≈40.58, −74.64) mostly sit over **zero or near-zero prior mass in all four
+  categories**, the same unexplained signature as `728_1` — but attributing
+  them to prior shape would be premature: they sit inside a
+  much-larger-amplitude leg-banding pattern that looks more like
+  incompletely corrected background drift than a flux-shape problem
+  specific to those individual cells.
+
+**This changes the open-question framing for `805`/`809`**: the next
+diagnostic step for these two flights should be background-side — did
+`detect_legs` segment them correctly, and does the leg-offset GP's
+`correlation_time_s` undershoot a real, fast boundary-layer change on these
+specific days? — not more prior-shape work, which is the opposite of what
+`726_1`/`728_1`/`728_2` needed.
+
+## 10. Major takeaways
 
 1. The residual structure left after MDM tuning is real and systematic, not
    noise — proven via cross-config stability, not assumed.
@@ -243,14 +307,21 @@ line of investigation.
    flights/features that motivated this investigation.
 8. Net position: `726_1`'s original hotspot is explained (prior shape).
    `726_1`'s dip and `728_1`'s broad residual gradient remain genuinely open.
+9. Extending §5 to the remaining three flights (§9) split them further:
+   `728_2` is `728_1`-like (broad gradient, correlation-length-limited plus
+   a zero-prior-mass sub-feature), but `805`/`809`'s dominant residual
+   pattern is leg-to-leg alternating banding, not a broad gradient or a
+   localized prior-shape defect — pointing back at background/leg-offset
+   fitting rather than the flux prior for those two flights specifically.
 
-## 10. Suggestions for future analysis
+## 11. Suggestions for future analysis
 
-1. **`728_1`'s cluster:** with zero prior mass at the residual location in
-   every category, the next step is `run_halo.py --compare` against the
-   alternative inventories (EPA, Pittsburgh) — if another inventory *does*
-   place mass there, that's strong evidence of a genuinely missing or
-   misclassified source in `m3t` specifically, not a modeling artifact.
+1. **`728_1`'s and `728_2`'s zero-prior-mass clusters:** with zero prior mass
+   at either residual location in every category, the next step is
+   `run_halo.py --compare` against the alternative inventories (EPA,
+   Pittsburgh) — if another inventory *does* place mass at either location,
+   that's strong evidence of a genuinely missing or misclassified source in
+   `m3t` specifically, not a modeling artifact.
 2. **`726_1`'s dip:** now that the leg-turn-artifact hypothesis is ruled out,
    it deserves its own look — e.g. check the raw XCH4 measurement's other
    channels/QA flags around that receptor (could be a real, narrow
@@ -263,16 +334,23 @@ line of investigation.
    that still show poor residuals (`728_1`/`728_2`/`805`/`809`). If they
    cluster there, it's a small but real contributing factor worth keeping on
    by default; if scattered, it's neutral hygiene with no diagnostic value.
-4. **Extend the §5 prior-shape/dipole-overlay diagnostic** to `728_2`, `805`,
-   and `809`'s remaining residual clusters — only `726_1` and `728_1` have
-   been worked through so far.
+4. **`805`/`809`'s leg-banding (§9):** unlike the other four flights, the
+   dominant residual pattern here is leg-to-leg alternating sign, not a
+   broad gradient or a localized prior defect. Next step is background-side,
+   not prior-side: re-run `detect_legs`/`fit_leg_offsets` diagnostics
+   (§2.2) specifically for these two flights and check whether legs are
+   segmented correctly and whether the GP's `correlation_time_s` is too long
+   to track a fast boundary-layer change on these particular days.
 5. **Reconsider `[category_spatial]` for categories pinned at 0**
    (`landfill`, `wastewater`, `other`): if an unexplained residual location
    turns out to coincide with a landfill/WWTP whose prior location might be
    slightly off, a small nonzero correlation length (much smaller than
    `natural_gas`'s 5km) could let the inversion nudge it without
-   over-smoothing genuinely diagonal point sources.
-6. **If none of the above resolve `728_1`-style residuals**, the
+   over-smoothing genuinely diagonal point sources. `805`'s cluster 2 (§9,
+   centroid ≈40.80, −74.37) and `809`'s cluster 0 both sit adjacent to real
+   `other`-category prior mass that the zero correlation length can't reach
+   — plausible first candidates to check if this is revisited.
+6. **If none of the above resolve `728_1`/`728_2`-style residuals**, the
    `outlier_threshold` mechanism (§6) remains a defensible last resort — but
    only after confirming the flagged points are the same recurring problem
    locations, not scattered/arbitrary, so it isn't silently discarding real
