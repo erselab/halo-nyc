@@ -223,7 +223,7 @@ new script, `dipole_diagnostic.py` (plots: `runs/dipole_diagnostic_
 <flight>_cluster<n>.png`).
 
 **Two method bugs surfaced and were fixed before trusting any result** —
-consistent with §10.6's rule that a surprising, consequential diagnostic
+consistent with §12.6's rule that a surprising, consequential diagnostic
 finding needs independent verification before being reported:
 
 1. Connected-component clustering of flagged residual bins initially used
@@ -254,7 +254,7 @@ finding needs independent verification before being reported:
   cluster (centroid ≈ 40.51, −74.14) has essentially **zero prior mass in
   all four categories** — the same "no degrees of freedom to produce signal
   with" signature as `728_1`'s residual, and a candidate for the same
-  alternative-inventory comparison recommended there (§11.1).
+  alternative-inventory comparison recommended there (§13.1).
 
 - **`20230805`, `20230809`**: the dominant pattern here is visually
   different from `726_1`/`728_1`/`728_2` — not one or two broad gradients,
@@ -277,7 +277,113 @@ diagnostic step for these two flights should be background-side — did
 specific days? — not more prior-shape work, which is the opposite of what
 `726_1`/`728_1`/`728_2` needed.
 
-## 10. Major takeaways
+## 10. Checking whether the buffer region explains the residual bias
+
+Prompted by a question about how the buffer (`halo_oe/buffer.py`, §-independent
+of this investigation until now — zero prior mentions) behaves when its prior
+flux is zero: could the buffer's coarse resolution (`factor=10`, ~10km
+super-cells) or finite `outer_bbox` be *causing* some of §9's unexplained
+residual bias, rather than being an unrelated nuisance parameter? Checked with
+three no-resolve diagnostics (script: `buffer_bias_check.py`; no inversion was
+re-solved — everything here reads the existing `legtest_legoffset_6flight`
+bundle plus one cheap `--diagnose-domain` Jacobian stream):
+
+1. **Tile-edge proximity.** Rebuilt the buffer's prior (`build_buffer` +
+   `category_priors_on_grid`, matched byte-for-byte against the bundle's saved
+   `buffer_membership`) and compared posterior to prior per super-cell. All
+   six §9 cluster centroids sit **63–103km inside the core**, i.e. nowhere
+   near any buffer super-cell (buffer cells only exist outside the core mask)
+   — a co-located tile-edge artifact cannot be the mechanism for any of them.
+   The buffer's posterior barely moves from its prior anywhere in the domain
+   near these clusters (|posterior − prior| / σ ≈ 0 at the nearest cell to
+   each); the one visibly "hot" super-cell in the whole domain sits in the far
+   west, ~300km from every flagged cluster.
+2. **Out-of-core sensitivity vs. residual, all 6 flights.** Ran the existing
+   `run_halo.py --diagnose-domain` (built for exactly this question — see
+   `halo_oe/diagnostics.py`'s `out_of_core_sensitivity`) to get each
+   receptor's fraction of *explained enhancement* originating outside the
+   core mask, joined 1:1 against the bundle's residuals by flight+coordinate
+   (counts and coordinates matched exactly for all 6 flights — a real join,
+   not an assumption). Pearson correlation between that fraction and
+   `|residual|` is weak or **negative** in every flight (`726_1`: −0.29,
+   `726_2`: −0.03, `728_1`: +0.01, `728_2`: +0.16, `805`: −0.06, `809`:
+   −0.17) — the scatter plots (`runs/buffer_bias_scatter.png`) show the
+   largest residuals concentrated at *low* out-of-core fraction, the opposite
+   of what the hypothesis predicts.
+3. **Spatial check.** The out-of-core fraction (`runs/buffer_bias_map.png`)
+   is a clean geographic effect — highest near the domain's NE corner (the
+   part of every flight track physically closest to the core boundary),
+   identically in *every* flight, including the already-explained `726_1`.
+   None of the §9 cluster locations fall in that high-sensitivity region;
+   they're all in the low-to-moderate part of the map.
+
+**Verdict: the buffer region is not a plausible explanation for `728_2`'s
+broad clusters or `805`/`809`'s leg-banding.** All three checks — spatial
+proximity, correlation, and map inspection — point the same way, and none of
+them required re-solving the inversion. Given the domain-truncation
+correlation from check 2 above never turns positive and meaningful for any
+flight, a buffer-disabled/coarsened ablation rerun (~31GB, real compute cost)
+is not warranted by these results and is not planned as a follow-up unless
+new evidence changes that.
+
+## 11. Checking whether diffuse, multi-category-split prior emissions explain the residual bias
+
+A second hypothesis, prompted by a question about how `category_fields` mode
+assigns uncertainty when a cell's emission is small and roughly evenly split
+across categories: in this mode, `Sa` is **block-diagonal across categories**
+(`pipeline.py`'s `category_covariance`, `[category_uncertainty] default =
+1.0` for every category in this config, no per-category override), so the
+absolute-flux prior variance at a cell is `Σ_k rel_k² e_{k,i}²` — an
+*independent* sum over categories, each scaled only by *its own* density. A
+fixed total density split evenly across `N` categories gets `1/N` the
+absolute-flux variance of the same total concentrated in one category (by
+Cauchy–Schwarz: `Σ e_k² ≤ (Σ e_k)²` with equality only when one term
+dominates). That shrinkage is a byproduct of specifying each category's
+uncertainty relative to its own density rather than the cell's total density,
+not an intentional "diffuse sources are better known" design choice — so a
+cell whose true (underestimated) emission is spread thinly across several
+categories would get an artificially tight prior band, one the inversion
+can't stretch to correct it. Distinct from the zero-prior-mass cases already
+found (§5/§9, no density in *any* category) — this targets cells with real,
+but split, density.
+
+**Checked** (script: `diffuse_prior_check.py`, no Jacobian read — pure
+`group_fields` read from the bundle) by computing each active cell's
+*concentration ratio* `Σ_k e_k² / (Σ_k e_k)²` (1.0 = one category dominates;
+0.25 = split evenly across all 4) and comparing it, at both a tight 5km and
+each cluster's own span-scale radius, across the six §9 clusters plus two
+reference points from §5/§7: `726_1`'s peak (**explained** — a real
+`natural_gas` sub-cluster misallocation) as a positive control, and `726_1`'s
+dip (unexplained, footprint-shape already ruled out).
+
+**Result is mixed, not a clean hit:**
+- `805`'s two clusters (concentration 0.54–0.59) and `809`'s cluster1 (0.48)
+  are meaningfully more diffuse than the explained `726_1` peak (0.68) and
+  sit near the domain's more-diffuse decile (p10 = 0.47) — a plausible fit.
+- But `728_2`'s **both** clusters (0.75, 0.84) and `809`'s cluster0 (0.76)
+  are *at or above* the explained peak's own concentration — not diffuse by
+  this measure, so the mechanism doesn't fit them.
+- `726_1`'s still-unexplained dip is the *most* concentrated location checked
+  (0.94 at 5km) — the opposite of diffuse, consistent with it needing a
+  different explanation entirely (as §13.2's suggestion for `726_1`'s dip
+  already assumed).
+- Visually (`runs/diffuse_prior_overview.png`), low concentration (~0.4–0.6)
+  is the **norm** across most of the rural/inland domain, not a rare property
+  unique to the flagged clusters — only the dense urban/coastal patches are
+  strongly one-category-dominated. So "this cell is diffuse" alone is a weak
+  discriminator; most of the domain looks like that away from concentrated
+  point-source patches, which tempers how much weight this mechanism alone
+  can carry as *the* explanation.
+
+**Verdict:** real, demonstrated mechanism, and a plausible partial
+contributor for `805`'s clusters and `809`'s cluster1 specifically — but it
+does not explain `728_2`'s broad gradient or `809`'s cluster0, which sit at
+prior concentrations similar to or higher than an already-explained case. Not
+a general answer to "why do these residuals persist," but worth keeping in
+mind alongside the correlation-length limit (§9) as a compounding factor
+where it does co-occur with low concentration.
+
+## 12. Major takeaways
 
 1. The residual structure left after MDM tuning is real and systematic, not
    noise — proven via cross-config stability, not assumed.
@@ -313,8 +419,21 @@ specific days? — not more prior-shape work, which is the opposite of what
    pattern is leg-to-leg alternating banding, not a broad gradient or a
    localized prior-shape defect — pointing back at background/leg-offset
    fitting rather than the flux prior for those two flights specifically.
+10. The buffer region (§10) is ruled out as a cause of any of the §9
+    residual patterns — three independent no-resolve checks (tile-edge
+    proximity, correlation, spatial map) all came back negative. Worth
+    remembering as a template: a plausible-sounding mechanism can often be
+    screened cheaply (no re-solve) before committing to an expensive
+    ablation rerun.
+11. `category_fields`' block-diagonal-across-categories prior gives cells
+    with the same total density but split thinly across categories a
+    tighter absolute-flux uncertainty than concentrated cells (§11) — real,
+    but only a partial fit to the open clusters (`805`, `809`'s cluster1),
+    not `728_2` or `809`'s cluster0. A mechanism being real and demonstrable
+    doesn't mean it's *the* explanation for every open case — check each
+    location rather than assuming a plausible story generalizes.
 
-## 11. Suggestions for future analysis
+## 13. Suggestions for future analysis
 
 1. **`728_1`'s and `728_2`'s zero-prior-mass clusters:** with zero prior mass
    at either residual location in every category, the next step is
