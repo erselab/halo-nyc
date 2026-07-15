@@ -732,6 +732,22 @@ curve estimate (~2.25km half-max, measured as distance from each event's
 own peak, which is far less confounded by generic leg-scale drift) rather
 than to wherever this unconstrained sweep happens to stop being run.
 
+**Leg timing, measured directly, confirms the confound is structurally
+unavoidable in this test.** Across all 6 flights (52 legs, via
+`detect_legs`): median leg duration ≈853s (~14min), median turn gap
+(end of one leg to start of the next) ≈260s (~4.3min, range 161–731s),
+median leg-to-leg period ≈1125s (~19min). An event's "elevated receptor"
+window (±20s padding around a ~10–20s excursion) is tiny next to even the
+*shortest* turn gap (161s) — so receptors within a single event are
+essentially always confined to one leg and never cross a turn boundary.
+The sweep therefore never has a same-event receptor pair spanning two legs
+to test against, which is exactly why it can't separate point-source
+correlation from leg-level bias: every event, by construction, only ever
+samples within-leg correlation. Also useful context on its own: the turn
+gap (161–731s) sits comfortably inside `leg_correlation_time_s = 600s`,
+consistent with §12's finding that the leg-offset GP had little to smooth
+between adjacent legs.
+
 ## 16. Major takeaways
 
 1. The residual structure left after MDM tuning is real and systematic, not
@@ -926,3 +942,114 @@ than to wherever this unconstrained sweep happens to stop being run.
    needed next step. Distinct from the global correlation-length sweep §1
    already found insufficient — this is a targeted, source-type-specific
    version of the same idea, not a repeat of it.
+
+## 18. Configuration reference
+
+The findings above are scattered across 17 sections built up over an
+extended investigation; this pulls every `config.ini` knob that was
+actually exercised into one place, organized by section header, each with
+what testing (or just using) it told us and where to read the detail. Not a
+new finding — a map of the ones already made.
+
+**`[background]`** — background subtraction (§2)
+- `method = planar`, `domain_sensitivity_quantile = 0.5`: the flight-wide
+  plane and the `fit_mask` it's restricted to (§2.1). The `fit_mask`
+  protocol — any new background idea must be tested with it honestly, never
+  skipped for a quick read — is the single most-repeated lesson in this
+  investigation (§4.1, established; violated and caught again in §16.6).
+- `use_leg_offsets = true`: this session's main background addition (§2.2).
+  Fixed `726_1`/`726_2` cleanly; `728_1`/`728_2`/`805`/`809` retained
+  substantial structure regardless (§3) — the split that motivated
+  everything from §4 onward.
+- `leg_gap_seconds = 8.0`, `leg_min_size = 10`, `leg_axis_deg = 45.0`
+  (`detect_legs` params): segmentation checked directly for `805`/`809` and
+  found reasonable (§12). Measured leg timing directly (§15 addendum, 52
+  legs across all 6 flights): median leg duration ≈853s, turn gap ≈260s
+  (range 161–731s), leg-to-leg period ≈1125s.
+- `leg_offset_stddev = 0.05`, `leg_correlation_time_s = 600.0`,
+  `leg_offset_noise_stddev = 0.02`, `leg_min_reliable_points = 15`
+  (`fit_leg_offsets` GP params): tested directly for `805`/`809` (§12) —
+  the GP-smoothed offset matched its own raw per-leg estimate almost
+  exactly on every leg (`raw ≈ smooth`), so `correlation_time_s` was never
+  oversmoothing anything; background modeling is exhausted for these two
+  flights regardless of this parameter's value.
+- `flight_data_dir`: required to recover real elapsed time (the Jacobian
+  files carry none) — the dependency underlying every along-track analysis
+  from §2.2 through §15.
+- `flag_footprint_discontinuities = false` (default/off),
+  `discontinuity_relative_threshold = 0.5`, `discontinuity_min_leg_size =
+  6`: new production QC feature (§8) for turn-affected release points
+  (~6–10% of legs, real but doesn't explain this investigation's
+  motivating flights). Never turned on in a real multi-flight run — still
+  open (§17.3).
+
+**`[category_spatial]`** — prior spatial correlation length (§5, §14, §15)
+- `default = 0`, `natural_gas = 5`, `combustion = 5` (km): sets the hard
+  ceiling on how far the posterior can relocate flux between cells.
+  Directly explains the §5 split — `726_1`'s ~50km feature was within
+  reach of several 5km-correlated `natural_gas` cells acting together;
+  `728_1`'s ~170km gradient wasn't, regardless of prior shape.
+- `landfill`/`wastewater`/`other` implicitly pinned at the `0` default
+  (true point sources in this model): tested whether loosening this would
+  help explain landfill/WWTP-associated excursions (§14a single-cell,
+  §15's swept extension to regional pooling) — found genuinely inert at
+  every scale tried (0–3km), not just unhelpful: `diag(A·Sa·Aᵀ)`, the
+  prior's actual contribution, was `1e-16`–`1e-10` against `R`'s `~7e-4`,
+  six-plus orders of magnitude too small to matter regardless of
+  correlation length or how many neighboring cells carry real density.
+
+**`[category_uncertainty]`** — relative prior uncertainty per category
+- `default = 1.0` (relative stddev on each cell's scale factor): drives
+  §11's diffuse-emissions finding directly — because `Sa` is block-diagonal
+  across categories, a fixed total density split evenly across N
+  categories gets `1/N` the absolute-flux variance of the same total
+  concentrated in one, an artifact of specifying uncertainty relative to
+  each category's own density rather than the cell's total. Real, but only
+  a partial fit to the still-open clusters (§11's verdict). Also the
+  `sigma_prior` used directly in §14a/§15's regularized point-source tests.
+
+**`[observations]`** — error model (§1, §6, §14, §15)
+- `error_model = components`, `mdm_stddev = 0.025`, `measurement_stddev =
+  0.01`: the components of `R` used directly in §15's joint sweep kernel.
+- `error_stddev = 0.02`: used as `sigma_obs` in §14a's single-cell
+  amplification test — the number that made a single grid cell's leverage
+  (`~1e-4` ppm/unit-scale) look negligible by comparison.
+- `mdm_correlation_length_km = 1.5`: the original subject of the 49-job
+  sweep (§1) that found **>99% of residual variance config-invariant**
+  across 1–20km — the result that justified moving off MDM tuning entirely
+  and into everything from §2 onward. Revisited in a *targeted* form in
+  §14b/§15: landfill/WWTP-associated excursions empirically cohere over
+  ≈2.25km (half-max), and a marginal-likelihood sweep confirms wider is
+  robustly better (broad-based across events) — but the sweep's own
+  endpoint (still improving at 10km) isn't trustworthy as a magnitude
+  estimate, since it's confounded with leg-level bias that has nothing to
+  do with point sources (§15 addendum). Not a repeat of §1's global
+  sweep — that tested one uniform value everywhere; this is source-type-
+  specific and still preliminary (15 events, not implementation-ready).
+- `outlier_threshold = 0` (off), `outlier_kind = innovation`: discussed
+  (§6) as a pragmatic fallback for individually bad points, explicitly
+  **not** a fix for spatially-coherent systematic structure. Never turned
+  on; remains a defensible last resort (§17.6) only after confirming
+  flagged points recur at the same locations.
+
+**`[buffer]`** — out-of-core flux representation (§10)
+- `enabled = true`, `mode = coarse`, `factor = 10`, `outer_bbox = [39, 43,
+  -77.5, -70]`, `stddev = 1.0`, `stddev_floor = 0.0`: tested as a possible
+  cause of the residual bias across three independent no-resolve checks
+  (tile-edge proximity, out-of-core-sensitivity correlation, spatial
+  mapping) — ruled out cleanly on all three; not revisited since.
+
+**`[domain]`** — core extent
+- `bbox = [39.9, 42.1, -76.9, -72.5]`: the region every correlation-length
+  reach, cluster-to-boundary distance, and out-of-core sensitivity number
+  in §5, §9, and §10 is measured relative to.
+
+**`[flux]` / `[decomposition]`**
+- `unit_scale = 1.0`; `method = category_fields`: the decomposition mode
+  actually run throughout — each category gets its own per-cell
+  **multiplicative scale factor** (prior mean `xa = 1.0` uniformly), a
+  distinct quantity from the `group_fields` density map used for
+  grouping/plotting. Conflating the two was a real bug caught mid-session
+  (§9) — any new diagnostic touching posterior flux must multiply by
+  density to get an actual flux perturbation, not diff the raw state
+  block against the density map directly.
