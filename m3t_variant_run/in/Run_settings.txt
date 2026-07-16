@@ -1,0 +1,137 @@
+Run Date: 2026-07-15
+M3T package version: (python port)
+
+Run settings:
+  run_directory = /gpfs/fs2/scratch/scrowel3_lab/halo-nyc/m3t_variant_run
+  inventory_year = 2019
+  domain = (-80.0, 39.5, -72.02, 43.5)
+  domain_res = (0.03, 0.02)
+  domain_crs = epsg:4326
+  verbose = False
+
+Config settings:
+  Terra_datatype = 'FLT8S'
+  Terra_progress = 0
+  Base_timeout = 1200
+  Use_ACES = False
+  Use_Vulcan = True
+  Source_Tigerlines_data = 'M3T'
+  Source_GHGRP_facility_data = 'M3T'
+  Source_GHGRP_combustion = 'M3T'
+  Source_GHGI = 'M3T'
+  Source_GHGRP_NG = 'M3T'
+  Source_Cartographic_Boundaries_data = 'M3T'
+  Source_ACES = 'M3T'
+  Source_Vulcan = 'download'
+  Process_landfills = True
+  landfill_ghgrp_reported = True
+  landfill_ghgrp_generation_first = True
+  landfill_ghgrp_collection_first = True
+  Source_GHGRP_landfills = 'M3T'
+  Source_LMOP = 'M3T'
+  GHGI_landfill_total = 'GHGI'
+  Process_natural_gas_distribution = False
+  NG_distribution_by_LDC = False
+  NG_distribution_by_state = True
+  NG_distribution_by_domain = False
+  Source_EIA_NG_file = 'M3T'
+  Source_PHMSA_file = 'M3T'
+  Source_GHGRP_LDC = 'M3T'
+  Source_byLDC_file = ''
+  natural_gas_pipeline_emission_factors =               Leaks_per_mile  Avg_emissions_mol_per_s
+Bare_Steel              0.51                 0.002327
+Cast_Iron               1.00                 0.001787
+Coated_steel            0.61                 0.002078
+Plastic                 0.43                 0.002109
+  natural_gas_res_post_meter_emission_factor = 1.9346530752262273e-10
+  natural_gas_com_post_meter_emission_factor = 0.0
+  GHGI_MnR = 'GHGI'
+  GHGI_maintenance = 'GHGI'
+  GHGI_meters = 'GHGI'
+  GHGI_services = 'GHGI'
+  Process_natural_gas_transmission = False
+  Source_HIFLD_compressor_file = 'M3T'
+  Source_EIA_transmission_file = 'M3T'
+  GHGI_Pipeline = 'GHGI'
+  GHGI_transmission_compressors = 'GHGI'
+  Mass_conserving_regrid = True
+  Process_stationary_combustion = False
+  stationary_combustion_by_state = True
+  stationary_combustion_by_domain = False
+  Source_EIA_SEDS_data = 'M3T'
+  Source_NEI_data = 'M3T'
+  stationary_combustion_emission_factors =    com_coal  ind_coal  elec_coal  ...  com_wood  ind_wood  elec_wood
+0      10.0      10.0        1.0  ...     300.0      30.0       30.0
+
+[1 rows x 14 columns]
+  Process_wastewater = True
+  Wastewater_use_CWNS = True
+  Wastewater_use_DMR = True
+  Wastewater_Municipal_Method_Moore = True
+  Wastewater_Municipal_Method_GHGI = True
+  Wastewater_national_septic = True
+  Wastewater_state_septic = True
+  Source_wastewater_NLCD = 'M3T'
+  Source_CWNS = 'M3T'
+  Source_DMR = 'M3T'
+  Source_State_population_data = 'M3T'
+  Source_GHGRP_wastewater = 'M3T'
+  GHGI_wastewater_data =       EF  Septic Emissions  Nonseptic Emissions  year
+0   10.7               204                  108  2010
+1   10.7               200                  104  2011
+2   10.7               204                  108  2012
+3   10.7               240                  128  2013
+4   10.7               236                  124  2014
+5   10.7               236                  124  2015
+6   10.7               240                  116  2016
+7   10.7               236                  104  2017
+8   10.7               236                  100  2018
+9   10.7               232                  250  2019
+10  10.7               227                  246  2020
+11  10.7               223                  273  2021
+12  10.7               215                  270  2022
+  Total_national_open_or_low_int_area = 'M3T'
+  Wastewater_reported_State_info =    State  Year  Septic_Fraction
+0     CA  2015           0.0645
+1     CA  2021           0.0408
+2     CA  2023           0.0560
+3     FL  2017           0.1509
+4     FL  2019           0.1265
+5     FL  2023           0.1611
+6     MA  2023           0.2403
+7     NY  2015           0.2083
+8     NY  2019           0.1626
+9     NY  2021           0.1592
+10    NY  2023           0.2029
+11    OH  2015           0.1963
+12    TX  2015           0.1441
+13    TX  2023           0.1276
+  National_wastewater_info =    Year  Septic_Fraction
+0  1990           0.2410
+1  2011           0.1949
+2  2013           0.1856
+3  2015           0.1986
+4  2017           0.1791
+5  2019           0.1635
+6  2021           0.1522
+7  2023           0.1858
+  Process_wetlands_and_inland_waters = False
+  Use_SOCCR1 = False
+  Use_SOCCR2 = False
+  Use_Wetcharts = True
+  Wetcharts_model_subset = [[1913, 1914, 1923, 1924, 1933, 1934, 2913, 2914, 2923, 2924, 2933, 2934, 3913, 3914, 3923, 3924, 3933, 3934]]
+  Source_wetland_NLCD = 'M3T'
+  Source_Watershed_file = 'M3T'
+  Source_wetcharts = 'M3T'
+  Source_NWI = 'M3T'
+  Wetland_EFs =         E2_Atlantic  M2_Atlantic  E2_Gulf  M2_Gulf  ...    R1    R2    R3    R4
+SOCCR1        10.30        10.30    10.30    10.30  ...  7.88  7.88  7.88  7.88
+SOCCR2        20.43        20.43    27.47    27.47  ...  7.88  7.88  7.88  7.88
+
+[2 rows x 16 columns]
+  Process_remaining_sectors_from_gridded_EPA = False
+  Source_GEPA = 'download'
+  Combine_sectors = True
+  Separate_thermo = False
+  Create_summary_combinations = True
+  Create_individual_combinations = False
