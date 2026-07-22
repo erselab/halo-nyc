@@ -205,11 +205,24 @@ def _time_binned_autocorr(r, t, max_lag_s=180.0, bin_width_s=5.0):
     return np.concatenate([[0.0], centers]), np.concatenate([[1.0], ac])
 
 
-def _residual_map_row(ax_row, fid, rlat, rlon, z, modeled, resid, flag, show_titles) -> None:
-    """One flight's spatial maps (enhancement / modeled / residual) into a row of axes."""
-    for a, (title, val, cmap) in zip(ax_row, [('enhancement z', z, 'viridis'),
-            ('modeled  Hx\u0302', modeled, 'viridis'), ('residual  z - Hx\u0302', resid, 'RdBu_r')]):
-        vlim = np.nanmax(np.abs(resid)) if cmap == 'RdBu_r' else None
+def _residual_map_row(ax_row, fid, rlat, rlon, z, prior_resid, modeled, resid, flag, show_titles) -> None:
+    """One flight's spatial maps into a row of axes: background-subtracted
+    observation (enhancement z), prior residual (z - Hxa), posterior modeled
+    (Hx\u0302), and posterior residual (z - Hx\u0302).
+
+    The two residual panels share one diverging color scale (max |residual|
+    across both, ignoring NaNs) so the prior-vs-posterior improvement is a
+    direct visual comparison rather than two independently auto-scaled plots.
+    """
+    both_resid = np.concatenate([prior_resid[np.isfinite(prior_resid)], resid[np.isfinite(resid)]])
+    resid_vlim = np.nanmax(np.abs(both_resid)) if both_resid.size else None
+    panels = [
+        ('enhancement z\n(obs \u2212 background)', z, 'viridis', None),
+        ('prior residual\nz - Hxa', prior_resid, 'RdBu_r', resid_vlim),
+        ('posterior modeled\nHx\u0302', modeled, 'viridis', None),
+        ('posterior residual\nz - Hx\u0302', resid, 'RdBu_r', resid_vlim),
+    ]
+    for a, (title, val, cmap, vlim) in zip(ax_row, panels):
         kw = dict(vmin=-vlim, vmax=vlim) if vlim else {}
         s = a.scatter(rlon, rlat, c=val, s=18, cmap=cmap, **kw)
         if flag.any():
@@ -277,19 +290,30 @@ def plot_residuals(bundle_dir: str, out_path: str = None) -> None:
     """Plot residuals and model-data-mismatch diagnostics, per flight.
 
     Reproduces the notebook's observation-diagnostics and mismatch sections
-    (spatial maps of enhancement/modeled/residual, normalized-residual
-    histogram, residual-vs-modeled, and along-track autocorrelation), but
-    computed separately for each flight rather than aggregated over all
-    observations \u2014 each flight has its own background fit and track geometry,
-    so pooling residuals across flights can mask flight-specific bias or
-    correlation structure. Each diagnostic type is written to a single file
-    (``residuals_map.png``, ``residuals_autocorr.png``) with one row per flight.
+    (spatial maps of enhancement/prior-residual/modeled/posterior-residual,
+    normalized-residual histogram, residual-vs-modeled, and along-track
+    autocorrelation), but computed separately for each flight rather than
+    aggregated over all observations \u2014 each flight has its own background fit
+    and track geometry, so pooling residuals across flights can mask
+    flight-specific bias or correlation structure. Each diagnostic type is
+    written to a single file (``residuals_map.png``, ``residuals_autocorr.png``)
+    with one row per flight.
+
+    The prior residual (``z - Hxa``, using ``prior_modeled`` saved alongside
+    ``modeled`` in the bundle) is included precisely because it is independent
+    of the fitted error covariance ``R`` (unlike ``z - Hx\u0302``, see
+    :func:`halo_oe.io_bundle.save_inversion`) \u2014 plotting it next to the
+    posterior residual on the same bundle, with no re-solve, is the standard
+    always-on check for how much the inversion actually moved the fit, for
+    every experiment run from now on.
     """
     inv = load_inversion(bundle_dir)
     R = inv.receptors
     rlat, rlon = R['receptor_lat'], R['receptor_lon']
     z, modeled = R['enhancement'], R['modeled']
+    prior_modeled = R.get('prior_modeled', np.full_like(z, np.nan))
     resid = z - modeled
+    prior_resid = z - prior_modeled
     flag = R.get('outlier_flag', np.zeros_like(z)).astype(bool)
     flight = R.get('receptor_flight', np.zeros_like(z, dtype=int)).astype(int)
     sels = _flights_present(inv.flight_ids or ['0'], flight)
@@ -315,10 +339,10 @@ def plot_residuals(bundle_dir: str, out_path: str = None) -> None:
             except (FileNotFoundError, ValueError) as e:
                 print(f'  flight {fid}: no elapsed time for autocorrelation ({e}); using index lag')
 
-    fig, ax = plt.subplots(n, 3, figsize=(16, 4.2 * n), constrained_layout=True, squeeze=False)
+    fig, ax = plt.subplots(n, 4, figsize=(20, 4.2 * n), constrained_layout=True, squeeze=False)
     for i, (fid, sel) in enumerate(sels):
-        _residual_map_row(ax[i], fid, rlat[sel], rlon[sel], z[sel], modeled[sel], resid[sel],
-                           flag[sel], show_titles=(i == 0))
+        _residual_map_row(ax[i], fid, rlat[sel], rlon[sel], z[sel], prior_resid[sel], modeled[sel],
+                           resid[sel], flag[sel], show_titles=(i == 0))
     fig.suptitle('Observation diagnostics by flight')
     if out_path:
         plt.savefig(os.path.join(out_path, 'residuals_map.png'), bbox_inches='tight')

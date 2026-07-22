@@ -223,7 +223,7 @@ new script, `dipole_diagnostic.py` (plots: `runs/dipole_diagnostic_
 <flight>_cluster<n>.png`).
 
 **Two method bugs surfaced and were fixed before trusting any result** —
-consistent with §17.6's rule that a surprising, consequential diagnostic
+consistent with §23.6's rule that a surprising, consequential diagnostic
 finding needs independent verification before being reported:
 
 1. Connected-component clustering of flagged residual bins initially used
@@ -254,7 +254,7 @@ finding needs independent verification before being reported:
   cluster (centroid ≈ 40.51, −74.14) has essentially **zero prior mass in
   all four categories** — the same "no degrees of freedom to produce signal
   with" signature as `728_1`'s residual, and a candidate for the same
-  alternative-inventory comparison recommended there (§18.1).
+  alternative-inventory comparison recommended there (§24.1).
 
 - **`20230805`, `20230809`**: the dominant pattern here is visually
   different from `726_1`/`728_1`/`728_2` — not one or two broad gradients,
@@ -365,7 +365,7 @@ dip (unexplained, footprint-shape already ruled out).
   this measure, so the mechanism doesn't fit them.
 - `726_1`'s still-unexplained dip is the *most* concentrated location checked
   (0.94 at 5km) — the opposite of diffuse, consistent with it needing a
-  different explanation entirely (as §18.2's suggestion for `726_1`'s dip
+  different explanation entirely (as §24.2's suggestion for `726_1`'s dip
   already assumed).
 - Visually (`runs/diffuse_prior_overview.png`), low concentration (~0.4–0.6)
   is the **norm** across most of the rural/inland domain, not a rare property
@@ -385,7 +385,7 @@ where it does co-occur with low concentration.
 
 ## 12. Testing the leg-offset oversmoothing hypothesis for `805`/`809`
 
-§9 reframed `805`/`809` as background-side, not prior-side, and §18.4
+§9 reframed `805`/`809` as background-side, not prior-side, and §24.4
 proposed the specific mechanism: maybe `fit_leg_offsets`'s GP
 (`leg_correlation_time_s = 600s`) oversmooths a real, faster-varying
 per-leg background signal. Tested directly (script: `leg_offset_check.py`,
@@ -456,7 +456,7 @@ already found leaking into "clean" receptors.
 
 **Autocorrelation: an initial visual read overclaimed a clean split, and a
 follow-up numeric check (script: `along_track_acf_quant.py`) corrected it —
-another instance of §17.6's rule.** The first pass eyeballed the six panels
+another instance of §23.6's rule.** The first pass eyeballed the six panels
 and reported `805`, `809`, `728_1` all showing `Hx̂` decorrelating more
 slowly than `z` (the transport-under-resolution signature), with
 `726_1`/`726_2`/`728_2` not. Tabulating the actual signed gap
@@ -581,7 +581,7 @@ what made the original six-flight split look cleaner than it was. This
 sharpens §7's hypothesis for `805` specifically beyond the single
 hand-picked `726_1` pair it was first tested on, but does **not** extend it
 to `809`/`728_1` as a group the way first
-claimed. The lesson about over-trusting a plot (§17.6) applied to this
+claimed. The lesson about over-trusting a plot (§23.6) applied to this
 investigation's own new work, not just historical cases — worth remembering
 the next time a multi-panel comparison looks clean at a glance, and worth
 following every such correction with an outlier-sensitivity check before
@@ -701,7 +701,7 @@ is simply too small, in absolute terms, to be distinguished from
 observation noise by a handful of receptors, regardless of how that
 leverage is spatially pooled. Reinforces §14's recommendation to pursue a
 locally-widened `R`, and closes off the regional-prior-amplification
-follow-up (§18.8) as not worth building — the single-cell result it was
+follow-up (§24.8) as not worth building — the single-cell result it was
 meant to extend turns out to generalize instead of being a special case.
 
 **Extending `L_obs` to 10km: the trend keeps going, and that's a caveat, not
@@ -816,7 +816,541 @@ clusters generally: check whether their locations coincide with landfills
 present in GHGI/LMOP but absent from GHGRP reporting, the same way this
 event's driving facility was found by direct inspection rather than guessed.
 
-## 17. Major takeaways
+## 17. Footprint similarity as a joint function of space and time
+
+New question: with §13–§16 all focused on background, prior-correlation, or
+inventory-methodology explanations, how do the footprints *themselves* vary
+along a flight track? If two receptors' footprints are similar enough
+regardless of when they were sampled, a single shared rotation parameter
+(nudging all footprints by the same angle to better fit the data) becomes a
+plausible, cheap correction for a systematic wind-direction/transport-angle
+error — but that's only worth testing if the underlying footprint shape is
+reasonably stable across the flight, not drifting with time.
+
+**Method (script: `footprint_similarity_space_time.py`).** For two flights
+with contrasting residual character (`726_1`: localized hotspot+dip; `805`:
+broad leg-to-leg banding), materialized the full (receptor × grid-cell)
+footprint matrix on the native STILT grid (not core-restricted, matching
+§7.4's convention), computed the full pairwise cosine similarity between
+every receptor pair, and binned it jointly by great-circle distance (5km
+bins to 150km) and elapsed-time gap (5min bins), masking any bin with fewer
+than 5 pairs as unreliable.
+
+**Result: distance dominates; time gap adds essentially nothing once
+distance is fixed.** In both flights, high similarity is confined to
+separations under ~15–20km — consistent with, and now confirmed by full
+pairwise comparison rather than a single hand-picked pair, §7.3's original
+along-track decay-length estimate. At the well-sampled fixed-distance
+slices (~18km, ~42km), similarity vs. time gap is flat and noisy across the
+*entire* flight duration (0 to 150–180min) for both flights — no detectable
+within-flight drift in footprint shape at a given spatial separation.
+`726_1` and `805` are structurally indistinguishable by this metric despite
+their very different residual character. The one hint of a time effect sits
+in the sparsest, least trustworthy bin: at ~2km separation, `805` shows only
+3 qualifying points (similarity 0.50 → 0.40 → 0.36 as the time gap grows to
+~2 hours) — suggestive of a mild decay for genuinely revisited corridors,
+but far too thin a sample to treat as established.
+
+**Verdict:** the stationarity result is good news for the rotation idea in
+one specific sense — it argues against needing a *time-varying* correction,
+since there's no sign of the footprint pattern drifting over the flight —
+and supports trying a single, fixed rotation parameter instead of a more
+complex one. But this test only compares footprints to *each other*; it
+cannot say whether a real, fixed misalignment exists, since a uniformly
+mis-rotated flight would look exactly as internally self-consistent as a
+correctly-oriented one. That comparison against real data is §18.
+
+## 18. Testing a footprint-rotation correction against real data
+
+§17 established that a single shared rotation parameter is at least a
+sensible thing to try (no within-flight drift to complicate it), but left
+open whether the data actually support one. This tests it directly: does
+rotating footprints about the receptor — a proxy for a systematic wind-
+direction/transport-angle error — improve the fit to observations at
+locations where a real, checkable answer is possible.
+
+**Method (script: `rotation_check.py`, no re-solve).** Reused the same 15
+landfill/WWTP-dominated events and candidate-cell neighborhoods from
+§14b/§15. For each event receptor, read its raw Jacobian row and built a
+local bilinear interpolator over a patch wide enough to contain every
+candidate cell at every trial angle (rotation preserves distance from the
+receptor, so the patch only needs to span the existing candidate-cell search
+radius). For a grid of trial angles (−30° to +30°, 2° steps), resampled each
+candidate cell's footprint value at its *pre-rotation* position — i.e. what
+the unrotated footprint's value would have been, for the rotated footprint
+to show this value here — rebuilt `A0_rot = H_rot × density`, and evaluated
+the same closed-form marginal likelihood used in §15, holding `L_prior` and
+`L_obs` at the current config baseline (0km / 1.5km) so only rotation
+varies. `theta = 0` reproduces §15's own baseline log-likelihood exactly, as
+a built-in sanity check.
+
+**Result: no effect, and no consistent direction.** Pooled across all 15
+events, the best achievable improvement anywhere in the ±30° range is
+`Δlog-lik = +0.15` — and that "best" sits right at the edge of the tested
+grid, with the *opposite* edge (−30°) giving almost the same gain (+0.13).
+The curve is symmetric and still rising at both boundaries, with no interior
+peak — the signature of a flat, uninformative likelihood surface, not a real
+directional preference. Per-event optimal angles confirm this: of the 15
+events, 6 prefer the extreme −30°, 6 prefer the extreme +30°, and only 3
+land on an interior value — almost an even split between the two
+boundaries, not the shared sign/magnitude a real wind-direction bias would
+produce. For scale, §15's `L_obs` sweep bought `Δlog-lik = +30.1` over these
+same events — rotation's total effect is about 200× smaller.
+
+**Verdict:** no evidence that a footprint-rotation correction would help, at
+least at these point-source events and within ±30°. Combined with §17's
+stationarity result, the rotation-parameter idea is closed out as tested-
+and-not-supported — a plausible-sounding transport-error mechanism ruled out
+by a direct, cheap, no-resolve check, in the same spirit as §10's buffer
+check. Scope caveat: this only tested compact point-source neighborhoods; it
+says nothing about whether rotation would help `805`'s broad leg-to-leg
+banding specifically, but that pattern was already attributed to background/
+leg-offset structure (§12), not to point sources, so this isn't a surprising
+gap.
+
+## 19. Single-flight vs. joint-fit comparison, and footprint-sensitivity differences across flights
+
+**Motivation.** Every diagnostic through §18 used the joint 6-flight
+inversion, which fits **one shared set** of per-cell category scale factors
+to all 6 days at once — implicitly assuming the same underlying emission
+field (up to those scale factors) explains every day. Two related questions
+had never been tested: does that joint-fitting assumption itself manufacture
+or mask the persistent residual structure, and — a prerequisite for trusting
+any answer to the first question — are the 6 flights' data even comparable,
+given each day's footprints depend on that day's specific meteorology?
+
+### Part A: footprint-sensitivity differences across flights
+
+**Method** (script: `flight_sensitivity_check.py`, no re-solve — one
+streamed `JacobianFile.cell_column_sums()` pass per flight, no operator
+materialization). For each flight: the raw per-cell sensitivity map,
+restricted to the core domain, pairwise cosine-compared across all 6
+flights; and, using the same prior-density fields the inversion uses
+(`group_priors_on_grid`), each flight's "expected signal" per category
+(sensitivity × prior emission, core-integrated) — how much a given day's
+data actually *sees* of each source category, independent of any solve.
+
+**Result: real differences exist, and `809` stands out sharply.**
+Pairwise cosine similarity of core-sensitivity maps ranges 0.44–0.85 across
+the 6 flights — not identical, not orthogonal. `809`'s map is visually
+distinct from the other five (`runs/flight_sensitivity_maps.png`): a large
+part of the northern/western core (roughly north of 41.25°, west of −75°)
+has **exactly zero** sensitivity, a real coverage gap, not just weak
+sensitivity, while every other flight has at least some (~1e-8–1e-10)
+sensitivity across nearly the whole domain. Per-category expected signal
+confirms it: `809` has the lowest signal of all 6 flights for landfill,
+natural_gas, *and* wastewater, and its relative composition is skewed — `other`
+is 35% of its total signal vs. 14–22% for every other flight, not because it
+saw more `other`-category sources but because its point-source-category
+signal is so depressed.
+
+**Verdict:** `809`'s single-flight posterior for landfill/natural_gas/
+wastewater should be expected to sit close to the prior — not because those
+emissions are actually near their prior values that day, but because the
+data barely constrain them. Any single-flight-based comparison involving
+`809` (including §20's Phase 3) needs this caveat; a big single-vs-joint gap
+for `809` in one of those categories would mean "this day's data doesn't
+inform this category," not "joint fitting biased this day."
+
+### Part B: does joint fitting itself manufacture the residual structure?
+
+**Method** (script: `run_single_flight_inversions.sh`, then
+`single_vs_joint_check.py`, no re-solve for the comparison itself). Solved
+each of the 6 flights **alone** (single-flight state, no shared information
+across days), using `runs/legtest_legoffset_6flight/config.ini` — the exact
+settings behind every diagnostic in this document — as the base config, with
+`use_leg_offsets` pinned explicitly (matching the reference bundle; the live
+`config.ini` had drifted to `false` and `mdm_stddev=0.03` by this point in
+the investigation and was only partially reconciled — see §25's config
+reference). Compared each flight's single-flight posterior against its own
+slice of the joint 6-flight posterior, at both the per-receptor-residual and
+per-category-flux level.
+
+**Result 1: per-receptor residuals are essentially identical.** Correlation
+between joint and single-flight residuals is r = 0.995–1.000 for all 6
+flights, with bias/RMS matching to the 4th decimal in every case
+(`runs/single_vs_joint_residual_scatter.png`). Whatever produces the
+persistent residual structure in this investigation, it survives completely
+unchanged when a flight is solved in total isolation from the other 5 —
+joint fitting is not creating it.
+
+**Result 2: category flux totals show the joint fit legitimately pooling
+consistent evidence, except for one category.**
+
+| category | joint scale | single-flight scale range (6 flights) |
+|---|---|---|
+| `other` | 1.000 | 1.000 (untouched, every flight) |
+| `natural_gas` | 0.857 | 0.902 – 1.002 |
+| `landfill` | 1.055 | **0.898 – 1.211** |
+| `wastewater` | 0.482 | 0.507 – 0.975 |
+
+For `natural_gas` and especially `wastewater`, every single flight
+independently pulls the scale factor the *same direction* (down from 1.0,
+never above) — they only disagree on magnitude. The joint fit (0.857, 0.482)
+sitting further from prior than any individual flight is exactly what
+correct pooling of agreeing evidence should do, not a symptom of forcing
+incompatible days into a compromise. `landfill` is the exception: single-
+flight scales span 0.898–1.211, straddling both sides of 1.0 — flights
+genuinely disagree on *direction*, not just magnitude, which is the
+signature of real day-to-day variability (or at least a materially noisier
+per-flight constraint) rather than consistent evidence being diluted by
+pooling. It doesn't show up as a residual problem (Result 1), but it's a
+real, distinct finding in its own right.
+
+**Cross-check against Part A.** `809` — the flight found to have weak/
+restricted sensitivity to landfill, natural_gas, and wastewater — shows
+single-flight scale factors of 0.978, 1.002, and 0.975 for exactly those
+categories: essentially pinned to the prior, exactly as Part A predicted.
+The two independent checks agree.
+
+**Verdict:** joint 6-flight fitting is ruled out as an explanation for the
+persistent residual structure — added to rotated winds (§17/§18) and
+remaining background (§4/§12) on the ruled-out list. Real day-to-day
+emission variability looks plausible for `landfill` specifically, worth
+keeping in mind as a distinct, minor thread, but not residual-relevant. The
+lasting, practical product of this section is the single-flight bundles
+themselves (`runs/single_<fid>`) and the sensitivity caveat on `809`, both
+reused directly in §20's Phase 3.
+
+## 20. Attacking hypothesis (a): systematic footprint-shape errors beyond rotation
+
+**Context.** With rotated winds (§17/§18) and remaining background (§4/§12)
+both ruled out, three candidate explanations remained for the residual
+structure still open at `805`/`809`: (a) systematic footprint-shape errors
+beyond rotation, (b) unresolved point sources, (c) systematic errors in the
+column data itself. (a) had the most existing, if scattered, supporting
+evidence — §13's finding that only `805` (strongly) and `809` (weakly) show
+`Hx̂` decorrelating more slowly along-track than `z` — and the most
+already-built infrastructure to extend, so it was attacked first via a
+three-phase plan, cheapest first, each phase's result scoping whether the
+next was worth running.
+
+**Phase 1 — is `805`/`809`'s footprint intrinsically broader than the other
+flights?** (script: `footprint_similarity_space_time.py`, extended from 2 to
+all 6 flights; run as its own SLURM allocation via
+`run_phase1_footprint_similarity_sbatch.sh`, ~15GB per flight materialized
+and freed in turn). Extracted each flight's along-track footprint
+self-similarity half-max decay length (same convention as §14b's empirical
+MDM decay estimate), pooled over all time gaps since §17 already found time
+gap barely matters at fixed distance. Mechanism being tested: `Hx̂` is a
+linear functional of the footprint against a smooth density field, so a
+footprint that stays similar over a longer along-track distance would
+mechanically produce exactly §13's decorrelation-length signature.
+
+| flight | half-max decay length |
+|---|---|
+| `726_1` | 7.9 km |
+| `728_1` | 8.6 km |
+| `728_2` | 10.0 km |
+| `805` | 12.1 km |
+| `726_2` | 12.9 km |
+| `809` | **19.6 km** |
+
+**Split result.** `809` is a clean, unambiguous outlier — nearly 2.5× `726_1`'s
+decay length, visibly separated from every other flight at every distance
+from 20–150km, not just at the half-max crossing (`runs/
+footprint_similarity_decay_1d.png`). `805` is **not** an outlier: its decay
+length (12.1km) is shorter than `726_2`'s (12.9km), one of the four flights
+this test predicted it should clearly exceed — its curve actually decays
+*faster* than `726_2`'s through the 10–40km range. The mechanism this phase
+tested confirms for `809`; it does not confirm for `805`.
+
+**Phase 2 — restricting §13's ACF-gap check to plume-affected receptors
+only** (script: `along_track_plume_restricted_check.py`; no Jacobian
+read — reuses the saved joint bundle plus `along_track_outlier_check2.py`'s
+clustered-event classification and `joint_correlation_sweep.
+group_into_events`, every clustered excursion, not just landfill/WWTP-
+dominated ones). §13 pooled its ACF-gap statistic over the whole flight,
+which dilutes real localized under-resolution against a long track mostly
+far from any source — flagged as its own biggest limitation but never
+fixed. Restricting to each event's own extent (±30s padding) instead:
+
+| flight | pooled gap (≤30s) | plume-restricted gap (≤30s) |
+|---|---|---|
+| `805` | +0.172 | **+0.399** |
+| `809` | +0.019 | **+0.406** |
+| `726_1` | −0.148 | −0.150 |
+| `726_2` | +0.173 | **−0.008** |
+| `728_1` | −0.169 | −0.207 |
+| `728_2` | −0.016 | −0.000 |
+
+**Clean confirmation, at both flights.** `805` and `809` both sharpen
+substantially and land on nearly identical values (+0.399 / +0.406); every
+control flight either stays null/negative or — `726_2` specifically — loses
+the spurious positive match §13 already attributed to a handful of
+variance-inflating real excursions rather than genuine under-resolution.
+Long-lag (>30s) numbers were computed too but are not reported as evidence:
+a direct pair-count check (not assumed) found the restricted receptor sets
+give only ~15–100 pairs per long-lag bin, well under the ~800/bin threshold
+§13's own bin-sparsity check established as trustworthy, and several
+control flights swung to large spurious positive long-lag gaps under that
+sparsity — exactly the kind of small-N artifact this investigation has
+learned to check for rather than assume.
+
+**Phase 3 — does artificially coarsening real footprints shrink modeled
+amplitude at real events, more for `805`/`809` than a control?** (script:
+`footprint_coarsening_check.py`; no re-solve — reads each flight's own
+single-flight bundle, `runs/single_<fid>`, and streams small local Jacobian
+patches only). For every clustered event's elevated receptors, Gaussian-
+smoothed the raw footprint (σ = 0/1/2/3/5km, mass-conserving) and
+recomputed the core contribution to `Hx̂` against that flight's own total
+posterior density (`inv.block(name) * ` prior density, summed over
+categories — the same construction `halo_oe/plotting.py::_plot_flux_maps`
+uses), tracking the shift relative to the unsmoothed baseline. Tested `805`,
+`809`, and `726_2` (already fully explained, §3) as a negative control.
+
+| flight | mean \|shrinkage\| at σ=5km |
+|---|---|
+| `805` | 0.00025 |
+| `726_2` (control) | 0.00018 |
+| `809` | 0.00003 |
+
+**Not a clean confirmation — a genuine complication.** `809` is *less*
+sensitive to added coarsening than the control, and `805` only modestly
+more. All three magnitudes are tiny — 0.1–3% of the ~0.01–0.03 ppm baseline
+modeled amplitude at these events (§13), nowhere near enough to close the
+real gaps (up to ±0.15 ppm) already documented. Most clustered events aren't
+landfill/WWTP point sources specifically (this phase deliberately didn't
+filter by category, unlike §14–16), so the underlying density near a typical
+event is likely fairly diffuse — smoothing the footprint has comparatively
+little sharp structure to redistribute, which limits this particular test's
+power to detect an amplitude effect even where one might be real.
+
+**Overall verdict: split, not uniform.** `809`'s case is well explained by
+footprint-shape/resolution error — Phase 1 (a genuinely broader intrinsic
+decay length) and Phase 2 (the along-track signature sharpening under
+restriction) are both independently positive for it, and it can reasonably
+be treated as closed. `805` is not — it shows the *same symptom* in Phase 2
+(and was the stronger, cleaner signature in §13's original finding) but
+neither Phase 1 (its footprint isn't intrinsically broad) nor Phase 3
+(coarsening barely moves its modeled amplitude) supports footprint
+resolution as the mechanism. Two flights with an identical along-track
+diagnostic signature most likely have two different underlying causes.
+`805`'s residual structure remains genuinely open, and should now be
+pointed at (b) unresolved point sources or (c) systematic column-data
+errors rather than further footprint-shape work — the next natural step
+per the original three-hypothesis framing this plan was built to attack.
+
+## 21. Attacking hypothesis (b): are real point sources missing from the prior?
+
+**Motivation.** §20 closed with a specific recommendation for `805`: check
+(b) unresolved point sources or (c) column-data errors, since footprint-shape
+work (a) didn't explain it. Separately, reading M3T's sector code directly
+(landfills.py, wastewater.py) to answer a general question about the prior-
+building pipeline had already identified three plausible mechanisms for a
+real facility to be invisible in the prior: a landfill in neither GHGRP nor
+LMOP gets no representation at all; an unguarded inner join between a
+facility's location table and its emissions table can silently drop a real
+reporter; and `m3t_option_1.nc4` was built from one specific method/source
+variant per sector (confirmed from the file's own NCO history attribute:
+landfill = GHGRP `reported` + LMOP residual; wastewater = CWNS + Moore +
+national septic), so a facility only present in an unused variant (e.g.
+DMR, not CWNS) would be invisible in the *actual* prior even though the
+code path to include it exists. This section tests all of that empirically.
+
+**Method** (script: `emissions_point_source_audit.py`, no re-solve — reads
+M3T's packaged reference datasets, the staged GHGRP facility-location table,
+and `m3t_option_1.nc4` directly). For every real, named, geolocated facility
+in the raw M3T inputs (GHGRP landfills + LMOP for the landfill sector; CWNS,
+DMR, and GHGRP industrial for wastewater) that falls inside the prior's own
+grid extent, looked up the built prior's value at that facility's own
+coordinates (nearest cell) and flagged any landing on an exact zero.
+Facility tables carry multiple years per facility; each facility's most
+recent available year was taken as representative — a stated simplification,
+since the mechanisms being tested are structural, not annual.
+
+**Two bugs caught before trusting any result — worth recording as their own
+lesson.** First pass: `m3t_option_1.nc4`'s `lat` array is descending, not
+ascending (confirmed directly, not assumed — strictly monotonic). The
+nearest-cell lookup used `np.searchsorted`, which silently assumes ascending
+order; with a descending array it ran without error but returned wrong
+indices everywhere, producing a nonsense "100% of facilities missing"
+result. Caught only because it contradicted §16's already-established fact
+that some facilities *are* represented — fixed by sorting the grid at load
+time, plus adding a direct sanity check against a manually-verified nonzero
+point (`fresh kills landfill`, expected ≈8.11) that now runs on every
+execution. Second bug, same pass: the landfill audit didn't replicate
+`compute_landfills`' own GHGRP/LMOP de-duplication
+(`lmop[~lmop["GHGRP ID"].isin(ghgrp["facility_id"])]`), so a real facility
+listed in both datasets under slightly different names (`fresh kills
+landfill` / `Fresh Kills SLF`, same `GHGRP ID`) was flagged as missing under
+its LMOP entry despite being correctly represented via its GHGRP entry.
+Fixed by excluding LMOP rows whose `GHGRP ID` matches any GHGRP facility.
+
+**Result: wastewater is essentially complete; landfill has 10 real gaps.**
+1363 real wastewater facilities fall inside the domain; only **1** is not
+represented — a DMR-only facility 158km south of the domain near the
+Delaware border, clearly irrelevant. The "CWNS chosen over DMR" concern
+raised going in doesn't matter empirically: nearly every DMR-only facility
+still lands on a nonzero cell, most likely via nearby CWNS coverage or the
+septic layer's broad area-based footprint. Landfill: 66 real facilities in
+the domain, **10 genuinely missing** — all real, current-format GHGRP
+facilities (not LMOP-diffuse cases), none within 5km of a known open
+residual cluster, though two sit on Long Island moderately near `728_2`'s
+cluster A: **Blydenburgh Road Landfill** (5.1km) and the **Town of
+Smithtown Municipal Services Facility** (11.2km). Full lists: `runs/
+emissions_point_source_audit_landfill.csv` / `_wastewater.csv`; map:
+`runs/emissions_point_source_audit_map.png`.
+
+**The mechanism behind all 10, diagnosed directly rather than guessed.**
+Comparing the 10 missing facilities against two confirmed-represented ones
+(`pennsauken sanitary landfill`, `edgemere landfill`) makes it unambiguous.
+The represented pair report continuously through 2023, no gaps,
+`reporting_status` blank throughout. All 10 missing facilities stopped
+reporting years ago (last real emissions data 2012–2018) and carry
+`reporting_status = "STOPPED_REPORTING_VALID_REASON"` from that point on.
+That status is the exact discriminator: `landfills.py`'s non-reporter
+carry-forward logic (lines 102–110) rescues only
+`"STOPPED_REPORTING_UNKNOWN_REASON"` — and across the whole facility table,
+that status accounts for just 757 of 21,187 non-null rows (4%) against
+20,430 (96%) for `VALID_REASON`. The carry-forward mechanism was built for
+a small minority case; the much larger group — facilities that stopped
+reporting for an administratively "valid" reason (falling under a reporting
+threshold, decommissioning a gas-collection system, etc.) — gets no
+carry-forward and no representation, permanently, once their last active
+year is behind the target inventory year.
+
+**Verdict: a real, physically-motivated gap, not a bug.** A landfill that
+stops GHGRP reporting for a "valid" administrative reason is treated by M3T
+as having zero ongoing emissions from that point forward. Closed landfills
+are well documented to keep generating methane from decomposing waste for
+years to decades after they stop being required to report — so all 10
+facilities found here are plausible, real, ongoing sources this
+investigation's prior currently cannot see at all, regardless of which
+GHGRP method variant is selected (§16's variant sensitivity test could never
+have caught this, since it compares variants that all share the same
+non-reporter handling). None is a confirmed smoking gun for `805` or `809`
+specifically — the closest lead is `728_2`'s Long Island cluster — but this
+closes out part of hypothesis (b) with a concrete, named mechanism, the same
+style of result as §16's GHGRP-non-reporter finding, and identifies exactly
+which 10 facilities would need independent verification (e.g. satellite or
+state-level data) to check whether they're still physically emitting.
+
+## 22. `728_2`'s Long Island gradient: three explanations tried, all ruled out
+
+**Context.** §21 found two real, currently-zero landfills near `728_2`'s
+Long Island residual — Blydenburgh Road Landfill (5.1km from the cluster)
+and the Town of Smithtown Municipal Services Facility (11.2km) — both
+excluded from the prior for the `STOPPED_REPORTING_VALID_REASON` reason
+diagnosed there. This section tests whether they (or two alternative
+mechanisms it led to) actually explain the residual.
+
+### 22.1 Point-source test: do the two missing landfills explain it?
+
+**Method** (script: `landfill_gap_sensitivity_check.py`, no re-solve). Same
+regularized single-parameter Bayesian amplification test used throughout
+this investigation (§14/§16/§18), but anchored to something better than an
+arbitrary unit density for once: each facility's own last-reported GHGRP
+emissions (before it stopped reporting) as the physically-motivated
+reference magnitude, tested under both the `reported` and `generation_first`
+methods (§16 already found these can differ 30x+). Prior on the
+amplification `x`: `N(0, 1)` — skeptical, `x=0` matches the facility's
+current (non-)reporting status, `x=1` means "still emits exactly at its own
+historical rate."
+
+**Result: underpowered, and the spatial pattern argues against it
+independent of that.** Posterior amplification stayed within 0.7σ of zero
+for both facilities under both reference magnitudes, with posterior
+uncertainty barely shrunk from the prior — the data added almost no
+information. Only 19 of 114 receptors near Blydenburgh Road (35 of 144 near
+Smithtown) have any meaningful sensitivity to that one grid cell — the same
+single-cell power problem §14a hit originally, now recurring with a much
+better-motivated reference magnitude and the same result. More informative
+than the fit itself: mapping the actual gap near both landfills shows a
+smooth, **monotonic gradient spanning the entire ~50km leg** — strongly
+negative in the southwest, strongly positive in the northeast, both
+landfills sitting near the zero-crossing roughly by coincidence. A real
+point source produces a localized bump decaying in both directions from its
+own location, not a trend that runs one direction across an entire leg —
+this pattern argues against a point-source explanation regardless of the
+statistical power problem.
+
+### 22.2 Background test: does continuous (per-receptor) kriging remove it?
+
+That gradient's shape raised a specific, checkable question: leg-offset
+fitting (already on in every bundle this investigation uses —
+`use_leg_offsets=true`, confirmed directly) is `fit_leg_offsets`'
+per-leg-**constant** kriging, GP-smoothed across *legs* in elapsed time. It
+has no mechanism to represent a value varying continuously *along* a single
+leg — a monotonic within-leg gradient is structurally invisible to it
+regardless of tuning. §4.2 tested a genuinely continuous alternative (a
+per-receptor spatial GP, not one constant per leg) for `728_1` and found a
+real but plateauing ~11-12% RMS improvement — never re-run for `728_2`.
+
+**Method** (script: `continuous_kriging_check.py`, no re-solve). Standard GP
+regression (exponential kernel over great-circle distance) fit to the
+plane-only residual (`receptor_background − receptor_background_offset`,
+recovered directly from the saved bundle, no re-fit needed) at the
+domain-insensitive (`fit_mask`) receptors, predicted continuously at every
+receptor, correlation length swept 5–150km.
+
+**Result: an attractive RMS number that doesn't survive inspection.** Short
+lengths give a real-looking RMS improvement (-25.5% full-flight, -22.1% in
+the landfill region at 5km) — but mapping it shows the gradient completely
+unchanged; the improvement comes from smoothing elsewhere on the flight, not
+from resolving this feature. More tellingly, performance gets **worse**
+than the current baseline as the length grows past ~10km (+8.9% at 20km,
++32.8% at 150km) — the opposite of what genuine broad-scale background
+structure should show, and inconsistent with §4.2's plateau for `728_1`.
+That inconsistency is itself diagnostic: a real background process should
+fit comparably well (or better) as the correlation length approaches its
+own true scale, not degrade monotonically past a short cutoff. Short-length
+"improvement" here looks like local overfitting/signal absorption — the
+same circularity risk §4.1 already caught once — not genuine background
+capture. **Verdict: not a background-explainable feature at any
+correlation length tested; instituting the 5km version was explicitly
+weighed and rejected** despite its RMS number, precisely because it doesn't
+touch the actual problem and risks absorbing real signal.
+
+### 22.3 Flux-side test: does widening `natural_gas`'s prior correlation length explain it?
+
+Of point source / background / flux-side, only the flux-side mechanism —
+via the category that's both already-populated *and* already has a nonzero
+configured correlation length (`natural_gas`, 5km; `combustion` is
+configured too but has zero actual cells in this M3T-based prior, confirmed
+directly) — had never been tested against this specific residual using its
+real mechanism, as opposed to a hypothetical point source or a
+category-blind background surface.
+
+**Method** (script: `natural_gas_correlation_length_check.py`, no
+re-solve). Same regularized marginal-likelihood machinery as §15's
+landfill/wastewater sweep, scoped to `natural_gas` cells and `728_2`
+receptors near the gradient, with a much larger neighborhood than §15's
+point-source tests needed (checked directly for tractable matrix size
+before running: 40km cell radius → ~3,900 candidate cells was used; 100km
+would have given ~20,000, intractable for the dense `Sigma = A Sa Aᵀ + R`
+this test forms at every sweep point). `R`'s own correlation length held
+fixed at its current configured value — only the prior side was in
+question here.
+
+**Result: technically significant, practically negligible — a clean null,
+not a weak one.** Log-likelihood does improve monotonically with `L`, the
+same no-peak-within-range pattern as §15's `L_obs` sweep — but the
+magnitude is on a different scale entirely: `Δlog-lik = +1.35` at L=150km
+(30× the current 5km) vs. §15's `+30.1` for the analogous `R`-side sweep,
+about 22× smaller. The gap reduction makes it unambiguous: 0.1% at the
+current length, rising to only 0.9% even at L=150km, and that negligible
+reduction requires an implausibly large correction (`+160%` at some cells)
+to achieve. Mapping the residual at the current length, the best-fit
+L=150km, and the completely uncorrected gap side by side shows all three
+**visually indistinguishable** — the gradient is untouched at any length
+tested.
+
+### Overall verdict
+
+`728_2`'s Long Island gradient has now survived three independent,
+well-motivated tests spanning every mechanism the current model has
+available: a point source at real, physically-grounded facility locations
+(§22.1), background modeling at both the constant-per-leg and continuous
+per-receptor level (§22.2), and flux-side adjustment of the one already-
+populated diffuse category with room to move (§22.3). None of hypothesis
+(a) [ruled out for `728_2`-adjacent flights already, §20], (b) [tested here
+directly], or standard background modeling explain it. This leaves (c)
+systematic column-data errors — still completely untested, for any
+flight — as the one remaining candidate in the original three-hypothesis
+framing, or a mechanism outside it entirely.
+
+## 23. Major takeaways
 
 1. The residual structure left after MDM tuning is real and systematic, not
    noise — proven via cross-config stability, not assumed.
@@ -887,7 +1421,7 @@ event's driving facility was found by direct inspection rather than guessed.
     confounds — normalization instability on low-variance series for the
     ACF, raw-amplitude dominance for the structure function — neither
     cleanly isolates "real signal at a given scale" as built. The catch
-    itself is the reusable lesson: §17.6's rule applied to this
+    itself is the reusable lesson: §23.6's rule applied to this
     investigation's own new work in the same session it was written, not
     just to older, already-cited cases. A further check explained *why*
     `726_2` had matched `805`: a handful of large excursions dominate
@@ -940,8 +1474,78 @@ event's driving facility was found by direct inspection rather than guessed.
     construction (GHGRP non-reporting → diffuse residual term) rather than a
     statistical property of the inversion — a different, more actionable
     kind of finding than anything in §5–§15.
+16. §17's footprint-similarity mapping showed distance, not elapsed time,
+    is what governs how alike two receptors' footprints are — at fixed
+    distance, similarity is flat across the whole flight duration, in both
+    a hotspot-dominated flight (`726_1`) and a large-scale-banding one
+    (`805`). Useful on its own (footprint shape is stationary within a
+    flight, so a time-varying transport correction isn't motivated), and a
+    good example of a test whose result is a precondition for a different
+    hypothesis (§18) rather than a verdict on that hypothesis itself — a
+    self-similarity check can support or undercut a *simpler* model for the
+    error, but can't confirm the error exists.
+17. §18's rotation test is this investigation's second clean "ruled out by
+    a direct check" result (after §10's buffer). The tell that it was a real
+    null, not an underpowered one: the improvement (`+0.15` log-lik) was
+    tiny *and* symmetric *and* still rising at both edges of the tested
+    range, and the per-event optimal angles split evenly between the two
+    extremes rather than agreeing with each other — three independent
+    signs of a flat, uninformative surface, not one summary number taken on
+    faith. Contrast with §15's `L_obs` sweep on the identical 15 events,
+    which found a real, ~200×-larger effect — the same events, the same
+    machinery, a decisively different answer, which is what makes the
+    rotation result trustworthy rather than another case of an underpowered
+    test being mistaken for a negative one (§23.14's lesson, applied here
+    with a test that had no such power problem).
+18. §19 closed out a question this investigation had never actually tested
+    despite using it as the foundation of every prior diagnostic: does
+    fitting all 6 flights jointly, rather than each day alone, manufacture
+    the persistent residual structure? No — single-flight residuals match
+    the joint fit's almost exactly (r ≥ 0.995, every flight). The category-
+    total comparison that answered *why* is the more interesting result:
+    `natural_gas` and `wastewater` show every single flight agreeing on
+    correction *direction*, so the joint fit moving further from prior than
+    any individual day is genuine evidence pooling, not a forced compromise
+    — `landfill` is the one category where flights actually disagree on
+    direction (0.898–1.211×), a real, separate, minor finding about day-to-
+    day variability that doesn't implicate the residual structure. The
+    footprint-sensitivity check that motivated this section paid for itself
+    twice: it predicted `809` would show near-prior single-flight scale
+    factors for its weakly-sampled categories, and the actual solve
+    confirmed it exactly — two independently-built checks agreeing is what
+    makes each trustworthy, not either one alone.
+19. §20's three-phase attack on hypothesis (a) is this investigation's first
+    result that is genuinely split rather than a clean confirm/deny: `809`
+    is well explained by footprint-shape/resolution error (a real, outlier-
+    broad intrinsic decay length in Phase 1, confirmed independently by
+    Phase 2's sharpened ACF signature); `805` shows the *same* along-track
+    symptom in Phase 2 — and was the stronger, original signature in §13 —
+    but neither Phase 1 (its footprint isn't intrinsically broad; it's
+    shorter-decaying than an already-explained control flight) nor Phase 3
+    (coarsening barely moves its modeled amplitude) supports the same
+    mechanism for it. Worth remembering as its own lesson: two flights
+    sharing one diagnostic signature does not mean they share one cause, and
+    a plan built to explain both should be allowed to confirm only one.
+20. §21's point-source audit is this investigation's clearest example yet of
+    verifying a code-reading conclusion empirically before trusting it. Two
+    real bugs surfaced only because the check was run and cross-checked, not
+    just reasoned about: a descending (not ascending) `lat` array silently
+    broke a `searchsorted`-based nearest-cell lookup and produced a nonsense
+    "100% missing" result, caught only because it contradicted §16's
+    already-established fact that some facilities *are* represented; and an
+    unreplicated GHGRP/LMOP de-duplication step flagged an already-covered
+    facility as missing under its LMOP alias. Once fixed, the result was
+    much smaller and more useful than the initial code-reading guess
+    suggested (10 real gaps out of 66 landfill facilities, not a systemic
+    problem) — and, unusually for this investigation, the *mechanism* behind
+    all 10 was fully diagnosable directly from data (`reporting_status =
+    "STOPPED_REPORTING_VALID_REASON"`, a status M3T's own non-reporter
+    carry-forward logic doesn't rescue) rather than left as a plausible
+    story. A deliberate modeling choice in M3T, not a bug in this
+    investigation's own pipeline — but a real, named, checkable gap all the
+    same.
 
-## 18. Suggestions for future analysis
+## 24. Suggestions for future analysis
 
 1. **`728_1`'s and `728_2`'s zero-prior-mass clusters:** with zero prior mass
    at either residual location in every category, the next step is
@@ -986,15 +1590,18 @@ event's driving facility was found by direct inspection rather than guessed.
    only after confirming the flagged points are the same recurring problem
    locations, not scattered/arbitrary, so it isn't silently discarding real
    signal.
-7. **An explicit footprint-coarsening test** (spatially smooth/coarsen STILT
-   footprints to ~3km and see whether that alone reproduces the flat model
-   response seen in the gradient-sharpness test) was proposed early on but
-   never run. §13's along-track check, after correction, only robustly
-   motivates this for `805` (`809` more weakly) — the initial three-flight
-   grouping with `728_1` did not survive a quantitative check (`728_1`
-   actually showed the opposite-signed gap) and should not be used to scope
-   this test. Separate from `726_1`'s dip specifically, which turned out not
-   to be footprint-shape-related.
+7. ~~An explicit footprint-coarsening test~~ **Done, §20 Phase 3 — not a
+   clean confirmation.** Rescoped from this item's original `726_1`/`728_1`
+   framing (superseded by §13's correction) to `805`/`809` with `726_2` as a
+   negative control, exactly as this item anticipated. Result: coarsening
+   real footprints up to 5km barely moves modeled amplitude at real events
+   for any of the three flights, and `809` — the flight §20 Phase 1
+   independently confirmed has a genuinely broader footprint — is actually
+   *less* sensitive to added coarsening than the control, not more. The
+   along-track *decorrelation-length* version of this idea held up (§20
+   Phase 1/2); the *amplitude* version this item specifically proposed did
+   not. Still separate from `726_1`'s dip, which remains footprint-shape-
+   unrelated (§7.4).
 8. **A regional (not single-cell) amplification test** (§14a): the
    single-cell version was statistically powerless (every event's posterior
    moved under 0.5σ from its prior) because one 1km cell's leverage on a
@@ -1035,10 +1642,26 @@ event's driving facility was found by direct inspection rather than guessed.
     for the zero-prior-mass clusters, and worth then checking systematically
     against `728_1`/`728_2`'s other unexplained locations (§5, §9) — do they
     also coincide with GHGI/LMOP-known but GHGRP-non-reporting landfills?
+11. **`805`'s residual structure, now that (a) is closed out for it
+    specifically (§20):** unlike `809`, none of the three footprint-shape
+    tests support a resolution-based explanation for `805`, despite it
+    having the original, cleanest along-track ACF signature in §13. The
+    next step should be (b) or (c), not further footprint-shape work —
+    concretely, check `805`'s specific residual locations against §16's
+    GHGRP-non-reporter mechanism (unresolved point sources) the same way
+    item 10 proposes for `728_1`/`728_2`, and separately look at `805`'s
+    raw column-data QA/retrieval flags (systematic column-data errors,
+    §20's hypothesis (c)) — the one candidate explanation this entire
+    investigation has never yet tested directly, for any flight. §21's
+    point-source audit is a first, general pass at the (b) half of this —
+    it found 10 real missing landfills nationally but none within 5km of
+    `805`'s own cluster (≈40.80,−74.37); the nearest hits are on Long
+    Island, near `728_2` instead. `805` specifically still needs its own
+    targeted look, and (c) remains completely untested for every flight.
 
-## 19. Configuration reference
+## 25. Configuration reference
 
-The findings above are scattered across 18 sections built up over an
+The findings above are scattered across 25 sections built up over an
 extended investigation; this pulls every `config.ini` knob that was
 actually exercised into one place, organized by section header, each with
 what testing (or just using) it told us and where to read the detail. Not a
@@ -1049,7 +1672,7 @@ new finding — a map of the ones already made.
   plane and the `fit_mask` it's restricted to (§2.1). The `fit_mask`
   protocol — any new background idea must be tested with it honestly, never
   skipped for a quick read — is the single most-repeated lesson in this
-  investigation (§4.1, established; violated and caught again in §17.6).
+  investigation (§4.1, established; violated and caught again in §23.6).
 - `use_leg_offsets = true`: this investigation's main background addition (§2.2).
   Fixed `726_1`/`726_2` cleanly; `728_1`/`728_2`/`805`/`809` retained
   substantial structure regardless (§3) — the split that motivated
@@ -1074,7 +1697,7 @@ new finding — a map of the ones already made.
   6`: new production QC feature (§8) for turn-affected release points
   (~6–10% of legs, real but doesn't explain this investigation's
   motivating flights). Never turned on in a real multi-flight run — still
-  open (§18.3).
+  open (§24.3).
 
 **`[category_spatial]`** — prior spatial correlation length (§5, §14, §15)
 - `default = 0`, `natural_gas = 5`, `combustion = 5` (km): sets the hard
@@ -1122,7 +1745,7 @@ new finding — a map of the ones already made.
 - `outlier_threshold = 0` (off), `outlier_kind = innovation`: discussed
   (§6) as a pragmatic fallback for individually bad points, explicitly
   **not** a fix for spatially-coherent systematic structure. Never turned
-  on; remains a defensible last resort (§18.6) only after confirming
+  on; remains a defensible last resort (§24.6) only after confirming
   flagged points recur at the same locations.
 
 **`[buffer]`** — out-of-core flux representation (§10)
