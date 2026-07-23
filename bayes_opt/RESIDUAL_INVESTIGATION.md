@@ -223,7 +223,7 @@ new script, `dipole_diagnostic.py` (plots: `runs/dipole_diagnostic_
 <flight>_cluster<n>.png`).
 
 **Two method bugs surfaced and were fixed before trusting any result** —
-consistent with §23.6's rule that a surprising, consequential diagnostic
+consistent with §25.6's rule that a surprising, consequential diagnostic
 finding needs independent verification before being reported:
 
 1. Connected-component clustering of flagged residual bins initially used
@@ -254,7 +254,7 @@ finding needs independent verification before being reported:
   cluster (centroid ≈ 40.51, −74.14) has essentially **zero prior mass in
   all four categories** — the same "no degrees of freedom to produce signal
   with" signature as `728_1`'s residual, and a candidate for the same
-  alternative-inventory comparison recommended there (§24.1).
+  alternative-inventory comparison recommended there (§26.1).
 
 - **`20230805`, `20230809`**: the dominant pattern here is visually
   different from `726_1`/`728_1`/`728_2` — not one or two broad gradients,
@@ -365,7 +365,7 @@ dip (unexplained, footprint-shape already ruled out).
   this measure, so the mechanism doesn't fit them.
 - `726_1`'s still-unexplained dip is the *most* concentrated location checked
   (0.94 at 5km) — the opposite of diffuse, consistent with it needing a
-  different explanation entirely (as §24.2's suggestion for `726_1`'s dip
+  different explanation entirely (as §26.2's suggestion for `726_1`'s dip
   already assumed).
 - Visually (`runs/diffuse_prior_overview.png`), low concentration (~0.4–0.6)
   is the **norm** across most of the rural/inland domain, not a rare property
@@ -385,7 +385,7 @@ where it does co-occur with low concentration.
 
 ## 12. Testing the leg-offset oversmoothing hypothesis for `805`/`809`
 
-§9 reframed `805`/`809` as background-side, not prior-side, and §24.4
+§9 reframed `805`/`809` as background-side, not prior-side, and §26.4
 proposed the specific mechanism: maybe `fit_leg_offsets`'s GP
 (`leg_correlation_time_s = 600s`) oversmooths a real, faster-varying
 per-leg background signal. Tested directly (script: `leg_offset_check.py`,
@@ -456,7 +456,7 @@ already found leaking into "clean" receptors.
 
 **Autocorrelation: an initial visual read overclaimed a clean split, and a
 follow-up numeric check (script: `along_track_acf_quant.py`) corrected it —
-another instance of §23.6's rule.** The first pass eyeballed the six panels
+another instance of §25.6's rule.** The first pass eyeballed the six panels
 and reported `805`, `809`, `728_1` all showing `Hx̂` decorrelating more
 slowly than `z` (the transport-under-resolution signature), with
 `726_1`/`726_2`/`728_2` not. Tabulating the actual signed gap
@@ -581,7 +581,7 @@ what made the original six-flight split look cleaner than it was. This
 sharpens §7's hypothesis for `805` specifically beyond the single
 hand-picked `726_1` pair it was first tested on, but does **not** extend it
 to `809`/`728_1` as a group the way first
-claimed. The lesson about over-trusting a plot (§23.6) applied to this
+claimed. The lesson about over-trusting a plot (§25.6) applied to this
 investigation's own new work, not just historical cases — worth remembering
 the next time a multi-panel comparison looks clean at a glance, and worth
 following every such correction with an outlier-sensitivity check before
@@ -701,7 +701,7 @@ is simply too small, in absolute terms, to be distinguished from
 observation noise by a handful of receptors, regardless of how that
 leverage is spatially pooled. Reinforces §14's recommendation to pursue a
 locally-widened `R`, and closes off the regional-prior-amplification
-follow-up (§24.8) as not worth building — the single-cell result it was
+follow-up (§26.8) as not worth building — the single-cell result it was
 meant to extend turns out to generalize instead of being a special case.
 
 **Extending `L_obs` to 10km: the trend keeps going, and that's a caveat, not
@@ -961,7 +961,7 @@ across days), using `runs/legtest_legoffset_6flight/config.ini` — the exact
 settings behind every diagnostic in this document — as the base config, with
 `use_leg_offsets` pinned explicitly (matching the reference bundle; the live
 `config.ini` had drifted to `false` and `mdm_stddev=0.03` by this point in
-the investigation and was only partially reconciled — see §25's config
+the investigation and was only partially reconciled — see §27's config
 reference). Compared each flight's single-flight posterior against its own
 slice of the joint 6-flight posterior, at both the per-receptor-residual and
 per-category-flux level.
@@ -1350,7 +1350,211 @@ systematic column-data errors — still completely untested, for any
 flight — as the one remaining candidate in the original three-hypothesis
 framing, or a mechanism outside it entirely.
 
-## 23. Major takeaways
+## 23. Single-day runs with leg offsets, the "best" found parameters, and outlier filtering on/off
+
+**Context: what "best parameters" honestly means.** Of every knob this
+investigation tested, only one has a motivated alternative to its current
+default — `mdm_correlation_length_km` (§14b's empirical ~2.25km vs. the
+configured 1.5km, though §26's own suggestions list flags this explicitly
+as preliminary, not implementation-ready). Everything else was *confirmed*
+at its default, not improved on: `mdm_stddev`/`measurement_stddev` (§1's
+49-job sweep), `category_spatial` `natural_gas=5km` (§15, §22.3), and
+`category_uncertainty` default `1.0` (never beaten). Outlier filtering (§6)
+has never been turned on anywhere in this investigation — `outlier_threshold
+= 0` confirmed directly in every bundle used, including via an empirical
+check (`outlier_flag` all-`False` across all 8,078 receptors in the joint
+bundle) — so no established "on" threshold existed; `3.0σ` with
+`outlier_kind = innovation` (already the configured kind, §6's own
+recommended one) was used as a standard default.
+
+**Method** (`run_single_flight_best_params.sh`: 12 real solves, 6 flights ×
+outlier off/on, `mdm_correlation_length_km=2.25` and leg offsets pinned on
+via the reference bundle's own config; `best_params_outlier_check.py`: no
+re-solve, compares residual stats and category scale factors against each
+other and against the earlier `runs/single_<fid>` baseline — 1.5km, no
+outlier filter — so the correlation-length change and the outlier change
+are each attributed separately, not conflated).
+
+**Result 1: the outlier filter only trips for the already-explained
+flights.** At 3σ innovation: `726_1` — 5 receptors flagged, `726_2` — 6,
+`728_1` — 3. `728_2`, `805`, `809` — the three flights with persistent,
+still-open residual structure — get exactly **zero** flags each. Their
+residual structure isn't concentrated in a handful of points sharp enough
+to cross a 3σ innovation threshold; it's smoothly spread out (consistent
+with `728_2`'s broad ~50km gradient, §22, which by construction wouldn't
+produce isolated spikes).
+
+**Result 2: where it trips, the effect is real but modest, and biggest for
+`726_2` specifically.**
+
+| flight | n flagged (3σ) | RMS, filter off | RMS, filter on |
+|---|---|---|---|
+| `726_1` | 5 | 0.0286 | 0.0279 |
+| `726_2` | 6 | 0.0189 | 0.0170 |
+| `728_1` | 3 | 0.0342 | 0.0338 |
+| `728_2` | 0 | 0.0310 | 0.0310 |
+| `805` | 0 | 0.0157 | 0.0157 |
+| `809` | 0 | 0.0198 | 0.0198 |
+
+`726_2`'s ~10% RMS drop is the standout, consistent with §13's finding that
+it has genuinely extreme excursions (max robust z-score 8.9) inflating its
+variance normalization. The other three are identical before/after, exactly
+as Result 1 predicts.
+
+**Result 3: the correlation-length change (1.5→2.25km) barely moves
+whole-flight RMS anywhere** — every flight's change is under 1% (e.g.
+`728_2`: 0.0308 → 0.0310), consistent with §14b/§15's characterization that
+its effect is concentrated at specific landfill/WWTP point-source events, a
+small fraction of any flight's receptors — too small to register in a
+whole-flight aggregate.
+
+**Result 4: but it has a real, interpretable effect on individual category
+scale factors** — it pulls the most extreme corrections back toward the
+prior, e.g. `728_2`'s landfill scale factor 1.211 (1.5km) → 1.163 (2.25km);
+`726_2`'s wastewater 0.709 → 0.750. Expected behavior of a longer MDM
+correlation length: nearby correlated residuals count as less independent
+evidence, so the fit is less aggressive everywhere it currently moves far
+from prior. `other` stays pinned at exactly `1.000` in every one of the 18
+bundles compared here (old, off, on × 6 flights) — still completely
+unmoved by anything tried against it anywhere in this investigation.
+
+**Verdict:** neither change meaningfully affects `728_2`/`805`/`809`
+specifically — the outlier filter has nothing to catch there since their
+residual structure isn't concentrated in extreme points, and the
+correlation-length change only nudges category totals broadly, not the
+underlying still-open residual pattern in those flights. Both matter more
+for the already-explained flights than for the open ones — a useful
+confirmation that "best parameters" here mostly means *confirmed harmless*,
+not *found to fix anything*.
+
+## 24. Why whole legs stand out in the posterior but never get flagged as outliers
+
+**Motivation.** §23 found the production outlier filter never trips for
+`728_2`/`805`/`809`. That raised the obvious follow-up: those flights
+visibly show entire legs standing out in the posterior residual maps used
+throughout this document — so why doesn't the filter catch *any* of that?
+
+### 24.1 The filter is provably per-receptor, not leg-aware
+
+Confirmed directly from source (`goe/outliers.py`), not inferred:
+
+```python
+diag_HSaHt = np.einsum("ki,ki->i", Ht, W)   # diag(H Sa Hᵀ) only
+return diag_HSaHt + R.diagonal()             # off-diagonal terms discarded
+```
+
+`R` is built *with* the along-track MDM correlation (`mdm_correlation_length_km`)
+— that correlation is used everywhere else in this investigation (the actual
+solve, every marginal-likelihood test, §14–§22) — but the outlier check
+specifically discards every off-diagonal entry and compares each receptor
+only to its own variance. A leg that's coherently offset by a moderate
+amount — every receptor individually only 1–2σ — never crosses a per-point
+threshold, no matter how large that same offset is when the whole leg is
+considered together: pooling `n` correlated receptors shrinks the effective
+uncertainty by roughly `√n` (less than that, to the exact extent they're
+correlated), turning a boring single-point deviation into a decisive
+aggregate one that the filter has no mechanism to see.
+
+### 24.2 Building the aggregate test directly (script: `leg_level_outlier_check.py`)
+
+For every leg (`detect_legs`) in every flight, tested whether the leg's
+*mean* posterior residual (`z − H·x̂` — the actual quantity in every
+residual map in this document, not the filter's own pre-fit quantity, see
+§24.3) differs from zero given the leg's real correlated `R`:
+
+```
+R_leg[i,j] = mdm_stddev² · exp(−dist(i,j)/mdm_correlation_length_km) + measurement_stddev² · [i=j]
+Var(mean)  = (1ᵀ R_leg 1) / n²          # NOT mean(diag(R_leg))/n — must use the full matrix
+leg_z      = mean(residuals in leg) / sqrt(Var(mean))
+```
+
+using the config's actual `mdm_stddev=0.025`, `measurement_stddev=0.01`,
+`mdm_correlation_length_km=1.5` throughout — the same `R` used everywhere
+else, just pooled correctly instead of only via its diagonal. (One
+simplification: `R` alone stands in for the full `G = H Sa Hᵀ + R` the
+production filter's default technically uses, justified by this
+investigation's repeated finding, §15/§22.3, that the prior's contribution
+to total variance is orders of magnitude smaller than `R`'s.)
+
+**Result: decisive, and sparse in a very specific way.** Of ~52 legs across
+the 6 flights, 14 have `|leg_z| > 3`. Only 6 legs have *any* individually-
+flagged receptor at all (76 receptors total, out of the whole dataset), and
+those 6 split into two different phenomena:
+
+- **Partial catch** (4 legs: `726_1` leg 2, `728_2` leg 0, `728_1` leg 0,
+  `728_1` leg 4) — these are exactly the legs with the *largest* leg-z
+  scores (13.0, −10.1, −9.5, 8.3), large enough that a handful of their most
+  extreme points also individually clear 3σ. But even here the filter only
+  catches a minority: `728_1` leg 0 flags 34 of 141 receptors, leaving 107
+  still carrying the same coherent bias untouched. Running the filter would
+  trim the tail, not fix the leg.
+- **Genuinely different problem** (`726_2` leg 5 and leg 3) — here the
+  *leg-level* z-score is unremarkable (1.70, 0.52) but one or two sharp
+  individual points (5.31σ, 3.17σ) get caught anyway — the filter correctly
+  doing its intended job on real isolated spikes, consistent with §13's
+  finding that `726_2` specifically has a few genuinely extreme excursions
+  rather than broad coherent structure.
+
+The **other 10 of the 14 significant legs** sit in a strict blind spot:
+leg-z from 3.2 to 8.0, and not one receptor in any of them ever exceeds
+~2.9σ individually (`726_1` leg 0, `809` leg 9, `728_2` leg 1, `728_1` legs
+5/6, `726_1` legs 1/3, `809` leg 8, `805` leg 0, `726_2` leg 7). No
+threshold on the per-receptor test could ever catch these without also
+flagging huge numbers of ordinary points elsewhere — the information only
+exists at the pooled level, not the single-receptor one. These legs span
+`726_1`, `728_1`, `728_2`, and `809` — i.e. leg-coherent structure this
+large isn't unique to the flights this investigation has focused on.
+
+### 24.3 Which of these were already there before fitting? (script: `leg_level_prior_vs_posterior_check.py`)
+
+Same pooled test, computed at both stages using the *same* `R_leg` (only
+the mean shifts between stages): `prior_leg_z` from the innovation
+`z − H·xa` (`prior_modeled`, saved directly, independent of `R` by
+construction — this is the filter's own pre-fit quantity, in contrast to
+§24.2's posterior-stage test), and `post_leg_z` from `z − H·x̂`.
+
+**Result: close to an even split, with a real and informative asymmetry.**
+Of 26 legs significant at the prior stage, 12 are substantially resolved by
+fitting (43–95% reduction) but 13 remain significant — and several of those
+get *worse*, not better: `728_2` leg 0 (−7.53σ → −10.06σ), `728_1` leg 0
+(−6.84σ → −9.51σ), `726_1` leg 0 (−5.68σ → −7.99σ), `726_1` leg 1 (−3.06σ →
+−4.57σ). This isn't random scatter: every one of the 12 resolved legs
+started **positive**; every worsened leg is **negative**, and on the
+prior-vs-posterior scatter plot the negative-going legs sit visibly beyond
+the 1:1 line while the positive-going ones are pulled inside it toward
+zero. Given this is the joint 6-flight bundle with one shared flux state,
+the natural reading is real cross-leg (and likely cross-flight) tension:
+whatever correction helps explain the positive legs is being pulled in a
+direction that actively worsens these specific negative ones, not
+independent per-leg noise. One case makes this concrete rather than
+inferred: `728_1` leg 5 went from unremarkable (−1.35σ, not significant)
+to −4.72σ *after* fitting — a leg the model had no problem with until the
+fit created one.
+
+Also notable: this is leg-specific, not flight-uniform, even within the
+flights this document has treated as uniformly hard. `728_2` has both
+extremes — leg 0 gets worse (−34%) while legs 6, 2, 4, and 7 resolve
+cleanly (58–89% reduction). "`728_2` is unexplained" was always too coarse
+a description; specific legs within it fit fine, and the genuinely stubborn
+residual lives in a subset, not the whole flight.
+
+### Could this improve the production filter?
+
+The natural extension — a correlation-aware, pooled group test sitting
+alongside the existing per-receptor one — is straightforward; §24.2/§24.3
+already are that test. The real design question is what to *do* when it
+fires, and the answer is **not** the same as the per-receptor filter's:
+automatically dropping every receptor in a flagged leg would risk exactly
+the failure mode §6 already warns against for single points, at a much
+larger scale (150+ receptors, several σ of aggregate significance) — a
+coherent leg-level bias is far more likely to be real structure (background,
+emission, or transport) than a gross error, which is what outlier rejection
+is actually for. §24.3 sharpens this further: roughly half of significant
+legs *are* explainable by the existing flux model, so blanket rejection
+would also discard cases the fit can legitimately handle. Worth keeping as a
+diagnostic/flagging tool — not worth wiring into automatic rejection.
+
+## 25. Major takeaways
 
 1. The residual structure left after MDM tuning is real and systematic, not
    noise — proven via cross-config stability, not assumed.
@@ -1421,7 +1625,7 @@ framing, or a mechanism outside it entirely.
     confounds — normalization instability on low-variance series for the
     ACF, raw-amplitude dominance for the structure function — neither
     cleanly isolates "real signal at a given scale" as built. The catch
-    itself is the reusable lesson: §23.6's rule applied to this
+    itself is the reusable lesson: §25.6's rule applied to this
     investigation's own new work in the same session it was written, not
     just to older, already-cited cases. A further check explained *why*
     `726_2` had matched `805`: a handful of large excursions dominate
@@ -1495,7 +1699,7 @@ framing, or a mechanism outside it entirely.
     which found a real, ~200×-larger effect — the same events, the same
     machinery, a decisively different answer, which is what makes the
     rotation result trustworthy rather than another case of an underpowered
-    test being mistaken for a negative one (§23.14's lesson, applied here
+    test being mistaken for a negative one (§25.14's lesson, applied here
     with a test that had no such power problem).
 18. §19 closed out a question this investigation had never actually tested
     despite using it as the foundation of every prior diagnostic: does
@@ -1545,7 +1749,7 @@ framing, or a mechanism outside it entirely.
     investigation's own pipeline — but a real, named, checkable gap all the
     same.
 
-## 24. Suggestions for future analysis
+## 26. Suggestions for future analysis
 
 1. **`728_1`'s and `728_2`'s zero-prior-mass clusters:** with zero prior mass
    at either residual location in every category, the next step is
@@ -1659,9 +1863,9 @@ framing, or a mechanism outside it entirely.
     Island, near `728_2` instead. `805` specifically still needs its own
     targeted look, and (c) remains completely untested for every flight.
 
-## 25. Configuration reference
+## 27. Configuration reference
 
-The findings above are scattered across 25 sections built up over an
+The findings above are scattered across 27 sections built up over an
 extended investigation; this pulls every `config.ini` knob that was
 actually exercised into one place, organized by section header, each with
 what testing (or just using) it told us and where to read the detail. Not a
@@ -1672,7 +1876,7 @@ new finding — a map of the ones already made.
   plane and the `fit_mask` it's restricted to (§2.1). The `fit_mask`
   protocol — any new background idea must be tested with it honestly, never
   skipped for a quick read — is the single most-repeated lesson in this
-  investigation (§4.1, established; violated and caught again in §23.6).
+  investigation (§4.1, established; violated and caught again in §25.6).
 - `use_leg_offsets = true`: this investigation's main background addition (§2.2).
   Fixed `726_1`/`726_2` cleanly; `728_1`/`728_2`/`805`/`809` retained
   substantial structure regardless (§3) — the split that motivated
@@ -1697,7 +1901,7 @@ new finding — a map of the ones already made.
   6`: new production QC feature (§8) for turn-affected release points
   (~6–10% of legs, real but doesn't explain this investigation's
   motivating flights). Never turned on in a real multi-flight run — still
-  open (§24.3).
+  open (§26.3).
 
 **`[category_spatial]`** — prior spatial correlation length (§5, §14, §15)
 - `default = 0`, `natural_gas = 5`, `combustion = 5` (km): sets the hard
@@ -1745,7 +1949,7 @@ new finding — a map of the ones already made.
 - `outlier_threshold = 0` (off), `outlier_kind = innovation`: discussed
   (§6) as a pragmatic fallback for individually bad points, explicitly
   **not** a fix for spatially-coherent systematic structure. Never turned
-  on; remains a defensible last resort (§24.6) only after confirming
+  on; remains a defensible last resort (§26.6) only after confirming
   flagged points recur at the same locations.
 
 **`[buffer]`** — out-of-core flux representation (§10)
