@@ -1,11 +1,43 @@
 # Residual & background investigation — findings and open questions
 
-This documents an extended investigation into systematic (non-noise-like)
-per-flight residual structure that survived MDM tuning, covering the
-background-model improvements that came out of it, the diagnostic ideas tried
-and ruled out along the way, and what remains genuinely unexplained. It
-complements [README.md](README.md) (architecture) and [TUNING.md](TUNING.md)
-(the MDM tuning procedure itself).
+**Status as of 2026-08-31.** This documents an extended investigation into
+systematic (non-noise-like) per-flight residual structure that survived MDM
+tuning, covering the background-model improvements that came out of it, the
+diagnostic ideas tried and ruled out along the way, and what remains
+genuinely unexplained. It complements [README.md](README.md) (architecture),
+[TUNING.md](TUNING.md) (the MDM tuning procedure itself), and — new as of
+this update — [WIND_VARIABILITY.md](WIND_VARIABILITY.md) (a general-purpose
+characterization of HRRR wind conditions across the 6 flights, kept as its
+own document since it's useful beyond this investigation).
+
+Sections are numbered in the order the investigation actually happened, and
+each one's own **Verdict** states the conclusion in force today — later
+sections sometimes supersede an earlier one's open question (cross-referenced
+where that happens), and a few sections narrate a wrong initial read before
+correcting it, kept because *how* the correction was caught is itself a
+reusable lesson (collected in §25). The status below is the current summary;
+read it first, then use the sections as the evidence trail behind it.
+
+## Current status, per flight
+
+| flight | status | mechanism |
+|---|---|---|
+| `726_1` | hotspot explained; dip open | hotspot = prior-shape misallocation (§5); dip = unexplained, footprint-shape ruled out (§7.4) |
+| `726_2` | explained | leg-offset background correction (§2.2/§3) |
+| `728_1` | open | broad correlation-length-limited gradient (§5); next step is comparing inventories (§26.1) |
+| `728_2` | open | broad correlation-length-limited gradient, a Long Island sub-cluster; three explanations tested and ruled out (§22) |
+| `805` | open | leg-to-leg banding; background modeling exhausted (§12); footprint-resolution ruled out (§20); land/water contrast present but doesn't close it (§28); one of the two larger HRRR-vs-HALO boundary-layer-depth mismatches at receptor resolution (§30.3, corrected from an earlier single-point read that had this backwards); by far the most light-and-erratic modeled wind of the six flights (§31), the most promising open lead |
+| `809` | explained | footprint-shape/resolution error — genuinely broader intrinsic footprint decay length (§20), now linked to a real mechanism: the deepest boundary layer of the 6 flights, correlating with footprint breadth across all 6 (§29.4), the largest HRRR-vs-HALO depth bias even after correcting to receptor resolution (§30.3), real sub-hourly boundary-layer swings HRRR's hourly cadence cannot represent (§30.2), and the one flight that breaks the SW/NE spatial bias gradient every other flight shares (§30.4) — three independent axes on which `809` is a distinct meteorological regime, not an extreme point on a shared spectrum |
+
+Two candidate explanations remain live for the flights still open
+(`728_1`, `728_2`, `805`): missing/misclassified sources in the `m3t`
+inventory (§21 found a real but geographically unrelated gap: 10 landfills
+dropped by a non-reporter carry-forward rule) and systematic errors in the
+raw column data itself, the one hypothesis this investigation has never
+tested directly (§22's closing verdict; §28's elapsed-time/land-water,
+§29's mixed-layer-height, and §30/§31's HRRR-meteorology regressors are all
+indirect first passes at it, not a direct one). See §26 for the full,
+current list of next steps.
 
 ## 1. Starting point: residuals are systematic, not noise
 
@@ -219,7 +251,7 @@ The §5 method (residual-cluster identification + per-category prior-mass
 overlay + correlation-length reach) had only been worked through by hand for
 `726_1` and `728_1`. Applied here to the three remaining flights, using the
 leg-offset-corrected 6-flight bundle (`runs/legtest_legoffset_6flight`) and a
-new script, `dipole_diagnostic.py` (plots: `runs/dipole_diagnostic_
+new script, `scripts/dipole_diagnostic.py` (plots: `runs/dipole_diagnostic_
 <flight>_cluster<n>.png`).
 
 **Two method bugs surfaced and were fixed before trusting any result** —
@@ -275,7 +307,10 @@ diagnostic step for these two flights should be background-side — did
 `detect_legs` segment them correctly, and does the leg-offset GP's
 `correlation_time_s` undershoot a real, fast boundary-layer change on these
 specific days? — not more prior-shape work, which is the opposite of what
-`726_1`/`728_1`/`728_2` needed.
+`726_1`/`728_1`/`728_2` needed. (Followed through in §12: the background-side
+lead is now closed — the GP is not the problem, and background modeling for
+these two flights is exhausted. §20 and §28 pick up where this section left
+off, with the footprint-resolution and land/water-contrast angles.)
 
 ## 10. Checking whether the buffer region explains the residual bias
 
@@ -284,7 +319,7 @@ otherwise touched by this investigation before now) behaves when its prior
 flux is zero: could the buffer's coarse resolution (`factor=10`, ~10km
 super-cells) or finite `outer_bbox` be *causing* some of §9's unexplained
 residual bias, rather than being an unrelated nuisance parameter? Checked with
-three no-resolve diagnostics (script: `buffer_bias_check.py`; no inversion was
+three no-resolve diagnostics (script: `scripts/buffer_bias_check.py`; no inversion was
 re-solved — everything here reads the existing `legtest_legoffset_6flight`
 bundle plus one cheap `--diagnose-domain` Jacobian stream):
 
@@ -307,10 +342,10 @@ bundle plus one cheap `--diagnose-domain` Jacobian stream):
    not an assumption). Pearson correlation between that fraction and
    `|residual|` is weak or **negative** in every flight (`726_1`: −0.29,
    `726_2`: −0.03, `728_1`: +0.01, `728_2`: +0.16, `805`: −0.06, `809`:
-   −0.17) — the scatter plots (`runs/buffer_bias_scatter.png`) show the
+   −0.17) — the scatter plots (`figures/buffer_bias_scatter.png`) show the
    largest residuals concentrated at *low* out-of-core fraction, the opposite
    of what the hypothesis predicts.
-3. **Spatial check.** The out-of-core fraction (`runs/buffer_bias_map.png`)
+3. **Spatial check.** The out-of-core fraction (`figures/buffer_bias_map.png`)
    is a clean geographic effect — highest near the domain's NE corner (the
    part of every flight track physically closest to the core boundary),
    identically in *every* flight, including the already-explained `726_1`.
@@ -347,7 +382,7 @@ can't stretch to correct it. Distinct from the zero-prior-mass cases already
 found (§5/§9, no density in *any* category) — this targets cells with real,
 but split, density.
 
-**Checked** (script: `diffuse_prior_check.py`, no Jacobian read — pure
+**Checked** (script: `scripts/diffuse_prior_check.py`, no Jacobian read — pure
 `group_fields` read from the bundle) by computing each active cell's
 *concentration ratio* `Σ_k e_k² / (Σ_k e_k)²` (1.0 = one category dominates;
 0.25 = split evenly across all 4) and comparing it, at both a tight 5km and
@@ -367,7 +402,7 @@ dip (unexplained, footprint-shape already ruled out).
   (0.94 at 5km) — the opposite of diffuse, consistent with it needing a
   different explanation entirely (as §26.2's suggestion for `726_1`'s dip
   already assumed).
-- Visually (`runs/diffuse_prior_overview.png`), low concentration (~0.4–0.6)
+- Visually (`figures/diffuse_prior_overview.png`), low concentration (~0.4–0.6)
   is the **norm** across most of the rural/inland domain, not a rare property
   unique to the flagged clusters — only the dense urban/coastal patches are
   strongly one-category-dominated. So "this cell is diffuse" alone is a weak
@@ -388,7 +423,7 @@ where it does co-occur with low concentration.
 §9 reframed `805`/`809` as background-side, not prior-side, and §26.4
 proposed the specific mechanism: maybe `fit_leg_offsets`'s GP
 (`leg_correlation_time_s = 600s`) oversmooths a real, faster-varying
-per-leg background signal. Tested directly (script: `leg_offset_check.py`,
+per-leg background signal. Tested directly (script: `scripts/leg_offset_check.py`,
 no re-solve): re-derived `fit_leg_offsets`'s internal raw (pre-GP) per-leg
 quantile estimate — exposing an intermediate value the production function
 doesn't return — using data already in the bundle (`receptor_background` −
@@ -413,7 +448,7 @@ correction, since there is essentially nothing being smoothed away.
 **But a real leg-to-leg oscillation survives anyway**, even restricted to
 the domain-insensitive ("clean air") receptors whose final residual isn't
 confounded by flux-fitting: ±0.006 ppm (`805`) to ±0.013 ppm (`809`) across
-legs (`runs/leg_offset_check_20230805.png`, `..._20230809.png`). Since `raw
+legs (`figures/leg_offset_check_20230805.png`, `..._20230809.png`). Since `raw
 ≈ smooth` already, this isn't a good correction that got smoothed away —
 the per-leg-constant quantile estimator itself never captured it, at any
 smoothing setting. **This corroborates §4.2's earlier, independently-derived
@@ -425,8 +460,8 @@ per-leg constant, continuous kriging), has a real ceiling on these flights
 that tuning a smoothing parameter further won't cross.
 
 Leg segmentation itself looks reasonable for both flights: 10 legs each.
-`runs/leg_segmentation_20230805.png` shows 8+ clean parallel lines.
-`runs/leg_segmentation_20230809.png` shows what looks like legs revisiting
+`figures/leg_segmentation_20230805.png` shows 8+ clean parallel lines.
+`figures/leg_segmentation_20230809.png` shows what looks like legs revisiting
 similar geography at different times — the exact scenario §2.2's per-leg
 offset was built for, not an obvious segmentation bug, though a
 time-ordered check would be needed to be fully certain.
@@ -441,151 +476,123 @@ prior-shape/correlation-length territory (as already done for `728_2` in
 ## 13. Along-track resolved-scale check: observed vs. modeled variability
 
 A systematic version of §7's one-off gradient-sharpness comparison (which
-only checked a single `726_1` hotspot/dip pair): if background varies
-slowly, comparing the along-track variability of the observed enhancement
-`z` to the modeled `Hx̂` directly measures the scale below which the model
-stops resolving real structure — without needing a specific known feature to
-anchor on. Checked (script: `along_track_scale_check.py`, no re-solve) with
-two real-elapsed-time-lag-binned statistics, computed per flight and pooled:
-the along-track **autocorrelation** (reusing `plotting._time_binned_autocorr`
-as-is) and the along-track **structure function** `D(τ) = ⟨(x(t+τ)−x(t))²⟩`
-(new, same binning). A noise-floor control — the same structure function
-computed on `z` restricted to the domain-insensitive (`fit_mask`)
-receptors — separates real signal from the background-fitting noise §12
-already found leaking into "clean" receptors.
+only checked a single `726_1` hotspot/dip pair): comparing the along-track
+variability of the observed enhancement `z` to the modeled `Hx̂` directly
+measures the scale below which the model stops resolving real structure,
+without needing a specific known feature to anchor on. Checked (script:
+`scripts/along_track_scale_check.py`, no re-solve) with two real-elapsed-time-lag-
+binned statistics, computed per flight and pooled: the along-track
+**autocorrelation** (reusing `plotting._time_binned_autocorr` as-is) and
+the along-track **structure function** `D(τ) = ⟨(x(t+τ)−x(t))²⟩` (new, same
+binning), plus a noise-floor control — the same structure function
+restricted to the domain-insensitive (`fit_mask`) receptors — to separate
+real signal from the background-fitting noise §12 already found leaking
+into "clean" receptors.
 
-**Autocorrelation: an initial visual read overclaimed a clean split, and a
-follow-up numeric check (script: `along_track_acf_quant.py`) corrected it —
-another instance of §25.6's rule.** The first pass eyeballed the six panels
-and reported `805`, `809`, `728_1` all showing `Hx̂` decorrelating more
-slowly than `z` (the transport-under-resolution signature), with
-`726_1`/`726_2`/`728_2` not. Tabulating the actual signed gap
-(`ac_modeled − ac_z`) per lag bin instead of reading the plot did not
-support that split:
+**Result: only `805` shows a clean, trustworthy transport-under-resolution
+signature; `809` matches weakly; no other flight does.** Tabulating the
+signed autocorrelation gap (`ac_modeled − ac_z`, script:
+`scripts/along_track_acf_quant.py`) per lag bin, per flight:
 
 | flight | mean gap, lag≤30s | mean gap, lag>30s | pattern |
 |---|---|---|---|
 | `805` | +0.17 | +0.27 | strong, consistent positive gap at every lag |
-| `726_2` | +0.17 | +0.18 | equally strong positive gap — **same sign and magnitude as `805`**, despite being an already-explained flight |
+| `726_2` | +0.17 | +0.18 | equally strong positive gap, but see below — this one is an artifact |
 | `809` | +0.02 | +0.09 | weak positive, only past ~12s |
 | `728_2` | −0.02 | −0.11 | near zero at short lag, mildly negative at long lag |
-| `728_1` | −0.17 | −0.17 | consistent *negative* gap — opposite sign from what was claimed |
-| `726_1` | −0.15 | −0.26 | consistent negative gap, growing with lag — opposite sign |
+| `728_1` | −0.17 | −0.17 | consistent *negative* gap |
+| `726_1` | −0.15 | −0.26 | consistent negative gap, growing with lag |
 
-Only `805` is an unambiguous, strong match for the transport-under-resolution
-signature at every lag. `809` matches weakly. `726_2` — already fully
-explained by leg-offset correction (§3) — shows a gap of the same sign and
-magnitude as `805`, and `728_1` (one of the flights the first pass claimed
-*did* show the signature) actually shows the opposite sign, matching
-`726_1`. **The split does not track the known good/bad flight split at all**
-and should not have been generalized from a plot impression.
+`726_2` — already fully explained by leg-offset correction (§3) — looks like
+a match for `805` in this table, but is not one: a follow-up check (script:
+`scripts/along_track_outlier_check.py`) found `726_2` carries genuinely extreme
+excursions (max robust z-score 8.9, 11 points beyond 4σ, vs. 3.3 and 2.9 for
+`805`/`809`) that inflate its variance normalization and manufacture the
+apparent gap — dropping its 5 most extreme receptors (0.4% of its data)
+shrinks the long-lag gap by ~19% (+0.178 → +0.144), while the same test barely
+moves `805`/`809` at all. Those 5 points are real point-source crossings, not
+measurement artifacts (confirmed below), so this isn't "726_2 has bad data";
+it's that a variance-normalized statistic like the ACF is unreliable for a
+flight whose variance is dominated by a handful of large real events, which
+is exactly `726_2`'s case and not `805`'s. `805`'s gap, by contrast, is
+spread broadly across many modest excursions rather than riding on a few
+dramatic ones, which is what makes it the trustworthy result here. `728_1`
+shows the opposite sign from `805`/`809` entirely, matching `726_1` — the
+autocorrelation gap does not track the known good/bad flight split beyond
+`805` (and weakly `809`), and should not be read as a six-flight pattern. A
+likely reason the sign is this unstable: the ACF normalizes by each series'
+own variance, and `Hx̂` is often very flat (low true variance) except where
+real flux signal exists, so how much structure a flight's footprints
+happened to see that day can flip a low-variance series' standardized
+autocorrelation in a way unrelated to model resolution — plausible, though
+not tested directly.
 
-A likely confound: the ACF normalizes by each series' own variance, and
-`Hx̂` is often very flat (low true variance) except where real flux signal
-exists — how much real structure a flight's footprints happened to see
-varies a lot flight-to-flight, which can destabilize a low-variance series'
-standardized autocorrelation in a way unrelated to "is the model too
-smooth." This plausibly explains why the sign flips without tracking flight
-quality, though it wasn't tested directly.
+**A second check, on excursion classification, gave a materially different
+and more accurate description of the same result** (script:
+`scripts/along_track_outlier_check2.py`). The "5 most extreme points" dropped from
+`726_2` above are not measurement artifacts: a global mean/std threshold is
+a poor outlier definition here, since a point on an otherwise unremarkable
+stretch of background can be several sigma from the *flight-wide* mean
+without being a real excursion, and a genuine point source is physically
+extended, so it should imprint on more than one consecutive sample, unlike a
+sensor glitch. Redefining excursions relative to each point's own local
+neighborhood (median of same-leg samples 8–45s away) and classifying each as
+CLUSTERED (a same-sign neighbor within 15s also shows a local excursion) vs.
+ISOLATED (no such neighbor) found **90%+ of local excursions in every flight
+are clustered** — `726_1`: 18/18, `726_2`: 37/41, `728_1`: 45/49, `728_2`:
+54/58, `805`: 13/14, `809`: 15/16 — and dropping only the true isolated
+points (0–4 per flight) changes essentially nothing anywhere (`z`'s stddev
+moves ≤0.8%, the ACF gap ≤0.02, in every flight including `726_2`). So what
+moved `726_2`'s gap above wasn't contamination by artifacts (nearly absent
+from all six flights) — it was a handful of **genuine, large, real
+point-source crossings** dominating its variance normalization. `805`'s
+signal being spread across many modest real events rather than a few
+dramatic ones is still the reason to trust it more; "broadly- vs.
+narrowly-supported by real events" is the accurate framing, not
+"outlier-robust."
 
-**Follow-up: is the surviving `805` signal itself an artifact of a few large
-point-source excursions in `z`?** Checked directly (script:
-`along_track_outlier_check.py`) rather than assumed. Two distinct
-mechanisms were in play: bin sparsity (a single extreme pair dominating a
-lag bin with few pairs) and per-series variance inflation (a few large `z`
-values shrinking the whole standardized series). Bin sparsity turned out not
-to matter — every lag bin has 800+ pairs for all three flights checked, far
-too many for one pair to dominate. Variance inflation, however, is real and
-sharply different between flights: `726_2` has genuinely extreme excursions
-(max robust z-score 8.9, 11 points beyond 4σ), and dropping just its 5 most
-extreme receptors (0.4% of that flight's data) shrinks its overall stddev by
-9% and its long-lag ACF gap by ~19% (+0.178 → +0.144). `805` and `809` have
-no comparably extreme points (max robust z-score 3.3 and 2.9), and the same
-drop-5 test barely moves either flight's numbers at all. **This explains why
-`726_2` matched `805`'s signature despite being an already-explained
-flight** — `726_2`'s apparent match is concentrated in a handful of large
-excursions inflating its variance normalization, while `805`'s is spread
-broadly across many modest ones, making it a meaningfully more trustworthy
-standalone finding than the raw gap-table comparison alone suggested.
+**A separate, repeated confirmation fell out of the clustered-event
+classification:** at literally every clustered (real) event across all six
+flights, `modeled Hx̂` stays small (~0.01–0.03) while `z` swings far larger
+(up to ±0.15) — the model essentially never reproduces these sharp real
+features at anywhere near full amplitude, in *any* flight. This is §7's
+original hotspot/dip finding confirmed at far higher sample size, though
+since it happens in every flight — including ones already fully explained
+another way — it doesn't by itself distinguish which flights have an
+unresolved *net* bias problem.
 
-**Important correction to that framing, from a follow-up check the user
-specifically requested** (script: `along_track_outlier_check2.py`): the
-"5 most extreme points" dropped above were *not* measurement artifacts.
-Global mean/std-based thresholds are a poor outlier definition here, since a
-point sitting on a slowly-varying but otherwise unremarkable stretch of
-background can be several sigma from the *flight-wide* mean without being a
-real excursion at all — and a genuine point source is physically extended,
-so it should imprint on more than one consecutive sample, unlike a sensor
-glitch. Redefining excursions relative to each point's own local
-neighborhood (median of same-leg samples 8–45s away, excluding the point's
-immediate vicinity so a multi-sample plume doesn't bias its own baseline)
-and classifying each as CLUSTERED (a same-sign neighbor within 15s also
-shows a local excursion) vs. ISOLATED (no such neighbor) found that **90%+
-of local excursions in every flight are clustered** — `726_1`: 18/18,
-`726_2`: 37/41, `728_1`: 45/49, `728_2`: 54/58, `805`: 13/14, `809`: 15/16.
-Dropping only the true isolated points (0–4 per flight) changes essentially
-nothing anywhere (`z`'s stddev moves ≤0.8%, the ACF gap ≤0.02, in every
-flight including `726_2`). So the earlier "outlier-sensitivity" framing was
-wrong in an important way: what made `726_2`'s gap move wasn't contamination
-by artifacts — real single-sample measurement artifacts are nearly absent
-from all six flights — it was removing a handful of **genuine, large,
-real point-source crossings**. `805`'s signal being spread across many
-modest real events rather than a few dramatic ones is still the right
-reason to trust it more, but "outlier-robust" was the wrong frame; "broadly-
-vs. narrowly-supported by real events" is the accurate one.
+**The structure function does not add anything beyond the autocorrelation
+here.** `D(τ)` is in absolute (ppm²) units, and `Hx̂`'s overall magnitude is
+much smaller than `z`'s throughout this investigation, so `D_modeled ≈ 0` at
+every lag mostly re-states that known amplitude gap rather than showing a
+scale/resolution difference. More informative: pooled and per-flight, `D_z`
+(all receptors) and the `fit_mask`-only noise-floor control are **nearly
+indistinguishable** at every lag, for every flight
+(`figures/along_track_structure*.png`) — at the whole-flight pooled level,
+observed along-track variability shows no excess structure attributable to
+real plume signal beyond the background noise floor. That's most likely
+dilution (most receptors on a long track are far from any point source at
+any given moment, so a flight-wide average swamps the localized moments with
+real signal) rather than evidence there's no real fine-scale plume structure
+— but this test, as built, can't distinguish those two explanations. A
+version restricted to domain-*sensitive* (plume-affected) receptors, rather
+than pooled over the whole flight, is the natural follow-up for both
+statistics if this angle is revisited.
 
-A striking pattern fell out of this that's worth its own note: at literally
-every clustered (real) event across all six flights, `modeled Hx̂` stays
-small (~0.01–0.03) while `z` swings far larger (up to ±0.15) — the model
-essentially never reproduces these sharp real features at anywhere near
-full amplitude, in *any* flight. This is a strong, repeated confirmation of
-§7's original hypothesis at far higher sample size than the single `726_1`
-hotspot it was first based on — but since it happens in every flight,
-including ones whose overall bias was already resolved another way, it
-doesn't by itself distinguish which flights have an unresolved *net* bias
-problem from which don't.
-
-**The structure function has the same amplitude-dominance problem as
-before, and is not a safe substitute for the (also-flawed) ACF here.**
-`D(τ)` is in absolute (ppm²) units, and `Hx̂`'s overall magnitude is much
-smaller than `z`'s throughout this whole investigation (every residual
-map's modeled colorbar has been visibly narrower than its enhancement
-colorbar) — so `D_modeled ≈ 0` at every lag mostly just re-states that known
-amplitude gap, not a scale/resolution difference. More surprising: pooled
-and per-flight, `D_z` (all receptors) and the `fit_mask`-only noise-floor
-control are **nearly indistinguishable** at every lag, for every flight
-(`runs/along_track_structure*.png`) — i.e., at the whole-flight pooled
-level, observed along-track variability doesn't show excess structure
-attributable to real plume signal beyond the background noise floor. That's
-most likely a dilution effect (most receptors on a long track are far from
-any point source at any given moment, so a flight-wide average swamps the
-localized moments with real signal) rather than evidence there's no real
-fine-scale plume structure — but this test, as built, can't distinguish
-those two explanations. A targeted version restricted to the
-domain-*sensitive* (plume-affected) receptors specifically, rather than
-pooled over the whole flight, would be the natural follow-up for both
-statistics if this angle is revisited — neither tool as currently built
-cleanly isolates "real signal at a given scale" from "how much true
-variance this series happens to have."
-
-**Verdict:** weaker than first reported, but the surviving part is on solid
-footing. `805` alone has a clean, strong, lag-consistent along-track
-signature matching transport under-resolution, confirmed to be spread
-broadly across its many (mildly) extreme receptors rather than riding on a
-handful of dramatic ones; `809` matches weakly; the rest of the six-flight
-split does not hold up against the quantitative check and should not be
-treated as established — `726_2`'s apparent match to `805` was concentrated
-in a handful of large, *real* point-source events (not measurement
-artifacts — see below) that dominate its variance normalization, which is
-what made the original six-flight split look cleaner than it was. This
-sharpens §7's hypothesis for `805` specifically beyond the single
-hand-picked `726_1` pair it was first tested on, but does **not** extend it
-to `809`/`728_1` as a group the way first
-claimed. The lesson about over-trusting a plot (§25.6) applied to this
-investigation's own new work, not just historical cases — worth remembering
-the next time a multi-panel comparison looks clean at a glance, and worth
-following every such correction with an outlier-sensitivity check before
-trusting whatever signal survives.
+**Verdict:** `805` has a clean, strong, lag-consistent along-track signature
+matching transport under-resolution, confirmed to be spread broadly across
+many modest excursions rather than riding on a handful of dramatic ones —
+the single most solid finding this section produced. `809` matches weakly.
+No other flight shows the signature; in particular `726_2`'s apparent match
+is a variance-normalization artifact of its own large real point-source
+events, not evidence of the same mechanism. This sharpens §7's hypothesis
+for `805` specifically, well beyond the single hand-picked `726_1` pair it
+was first tested on, but does not extend it to `809`/`728_1` as a group.
+(Getting to this required two rounds of correcting an initial, more
+sweeping claim — first a plot-based six-flight split that didn't survive
+quantification, then an "outlier-sensitivity" framing that had the right
+instinct but the wrong mechanism — both folded into the account above
+rather than narrated separately; see §25.13 for the methodological lesson.)
 
 ## 14. Point-source amplification and MDM correlation-length tests
 
@@ -596,8 +603,8 @@ error that belongs in `R` rather than the prior? Both were tested, on
 `805` first for (a) and pooled across all 6 flights for (b) — no re-solve
 either way.
 
-**(a) Single-cell amplification (scripts: `point_source_intersection_check.py`,
-`point_source_amplification_check.py`).** Grouped `805`'s clustered
+**(a) Single-cell amplification (scripts: `scripts/point_source_intersection_check.py`,
+`scripts/point_source_amplification_check.py`).** Grouped `805`'s clustered
 excursions (§13) into 11 discrete events and checked prior-mass overlap:
 **0 of 11 have zero prior mass within 10km** — a real contrast with the
 `728_1`-style "missing source" clusters in §5/§9, where some residual
@@ -624,7 +631,7 @@ reminder that an ill-conditioned small linear solve needs a prior-informed
 regularizer, not just more averaging, when the sensitivity is this weak.
 
 **(b) Empirical MDM correlation length near landfill/WWTP sources**
-(script: `landfill_wwtp_coherence_check.py`). `landfill` and `wastewater`
+(script: `scripts/landfill_wwtp_coherence_check.py`). `landfill` and `wastewater`
 are the two genuinely point-source categories here (`[category_spatial]`
 pins both at 0), so an excursion whose nearby prior mass they dominate is
 the cleanest available test of real point-source transport coherence.
@@ -666,7 +673,7 @@ than guessing which one is "right" is the more principled approach: compute
 the marginal likelihood of each landfill/WWTP event's local data under a
 grid of both length scales together.
 
-**Method (script: `joint_correlation_sweep.py`, no re-solve):** for each of
+**Method (script: `scripts/joint_correlation_sweep.py`, no re-solve):** for each of
 the 15 qualifying events (§14b), built a small closed-form Gaussian model
 over its nearby candidate-category cells (prior `Sa[c,c'] = σ_prior² exp(-d/
 L_prior)`) and elevated receptors (`R[i,i'] = mdm_stddev² exp(-d/L_obs) +
@@ -767,7 +774,7 @@ has a similar three-stream structure (municipal CWNS/DMR × GHGI/Moore,
 industrial GHGRP, septic).
 
 **Method (scripts: `run_m3t_landfill_wwtp_variants.py`,
-`m3t_variant_spatial_check.py`; one real M3T run, everything after is
+`scripts/m3t_variant_spatial_check.py`; one real M3T run, everything after is
 no-resolve).** Landfills has 3 method variants; wastewater has 8
 (`{CWNS,DMR} × {GHGI,Moore} × {national,state septic}`) — and both sectors'
 code computes *every enabled variant in one run* rather than needing
@@ -827,7 +834,7 @@ plausible, cheap correction for a systematic wind-direction/transport-angle
 error — but that's only worth testing if the underlying footprint shape is
 reasonably stable across the flight, not drifting with time.
 
-**Method (script: `footprint_similarity_space_time.py`).** For two flights
+**Method (script: `scripts/footprint_similarity_space_time.py`).** For two flights
 with contrasting residual character (`726_1`: localized hotspot+dip; `805`:
 broad leg-to-leg banding), materialized the full (receptor × grid-cell)
 footprint matrix on the native STILT grid (not core-restricted, matching
@@ -869,7 +876,7 @@ rotating footprints about the receptor — a proxy for a systematic wind-
 direction/transport-angle error — improve the fit to observations at
 locations where a real, checkable answer is possible.
 
-**Method (script: `rotation_check.py`, no re-solve).** Reused the same 15
+**Method (script: `scripts/rotation_check.py`, no re-solve).** Reused the same 15
 landfill/WWTP-dominated events and candidate-cell neighborhoods from
 §14b/§15. For each event receptor, read its raw Jacobian row and built a
 local bilinear interpolator over a patch wide enough to contain every
@@ -921,7 +928,7 @@ given each day's footprints depend on that day's specific meteorology?
 
 ### Part A: footprint-sensitivity differences across flights
 
-**Method** (script: `flight_sensitivity_check.py`, no re-solve — one
+**Method** (script: `scripts/flight_sensitivity_check.py`, no re-solve — one
 streamed `JacobianFile.cell_column_sums()` pass per flight, no operator
 materialization). For each flight: the raw per-cell sensitivity map,
 restricted to the core domain, pairwise cosine-compared across all 6
@@ -933,7 +940,7 @@ data actually *sees* of each source category, independent of any solve.
 **Result: real differences exist, and `809` stands out sharply.**
 Pairwise cosine similarity of core-sensitivity maps ranges 0.44–0.85 across
 the 6 flights — not identical, not orthogonal. `809`'s map is visually
-distinct from the other five (`runs/flight_sensitivity_maps.png`): a large
+distinct from the other five (`figures/flight_sensitivity_maps.png`): a large
 part of the northern/western core (roughly north of 41.25°, west of −75°)
 has **exactly zero** sensitivity, a real coverage gap, not just weak
 sensitivity, while every other flight has at least some (~1e-8–1e-10)
@@ -954,8 +961,8 @@ inform this category," not "joint fitting biased this day."
 
 ### Part B: does joint fitting itself manufacture the residual structure?
 
-**Method** (script: `run_single_flight_inversions.sh`, then
-`single_vs_joint_check.py`, no re-solve for the comparison itself). Solved
+**Method** (script: `scripts/run_single_flight_inversions.sh`, then
+`scripts/single_vs_joint_check.py`, no re-solve for the comparison itself). Solved
 each of the 6 flights **alone** (single-flight state, no shared information
 across days), using `runs/legtest_legoffset_6flight/config.ini` — the exact
 settings behind every diagnostic in this document — as the base config, with
@@ -969,7 +976,7 @@ per-category-flux level.
 **Result 1: per-receptor residuals are essentially identical.** Correlation
 between joint and single-flight residuals is r = 0.995–1.000 for all 6
 flights, with bias/RMS matching to the 4th decimal in every case
-(`runs/single_vs_joint_residual_scatter.png`). Whatever produces the
+(`figures/single_vs_joint_residual_scatter.png`). Whatever produces the
 persistent residual structure in this investigation, it survives completely
 unchanged when a flight is solved in total isolation from the other 5 —
 joint fitting is not creating it.
@@ -1026,9 +1033,9 @@ three-phase plan, cheapest first, each phase's result scoping whether the
 next was worth running.
 
 **Phase 1 — is `805`/`809`'s footprint intrinsically broader than the other
-flights?** (script: `footprint_similarity_space_time.py`, extended from 2 to
+flights?** (script: `scripts/footprint_similarity_space_time.py`, extended from 2 to
 all 6 flights; run as its own SLURM allocation via
-`run_phase1_footprint_similarity_sbatch.sh`, ~15GB per flight materialized
+`scripts/run_phase1_footprint_similarity_sbatch.sh`, ~15GB per flight materialized
 and freed in turn). Extracted each flight's along-track footprint
 self-similarity half-max decay length (same convention as §14b's empirical
 MDM decay estimate), pooled over all time gaps since §17 already found time
@@ -1056,8 +1063,8 @@ this test predicted it should clearly exceed — its curve actually decays
 tested confirms for `809`; it does not confirm for `805`.
 
 **Phase 2 — restricting §13's ACF-gap check to plume-affected receptors
-only** (script: `along_track_plume_restricted_check.py`; no Jacobian
-read — reuses the saved joint bundle plus `along_track_outlier_check2.py`'s
+only** (script: `scripts/along_track_plume_restricted_check.py`; no Jacobian
+read — reuses the saved joint bundle plus `scripts/along_track_outlier_check2.py`'s
 clustered-event classification and `joint_correlation_sweep.
 group_into_events`, every clustered excursion, not just landfill/WWTP-
 dominated ones). §13 pooled its ACF-gap statistic over the whole flight,
@@ -1089,7 +1096,7 @@ learned to check for rather than assume.
 
 **Phase 3 — does artificially coarsening real footprints shrink modeled
 amplitude at real events, more for `805`/`809` than a control?** (script:
-`footprint_coarsening_check.py`; no re-solve — reads each flight's own
+`scripts/footprint_coarsening_check.py`; no re-solve — reads each flight's own
 single-flight bundle, `runs/single_<fid>`, and streams small local Jacobian
 patches only). For every clustered event's elevated receptors, Gaussian-
 smoothed the raw footprint (σ = 0/1/2/3/5km, mass-conserving) and
@@ -1148,7 +1155,7 @@ national septic), so a facility only present in an unused variant (e.g.
 DMR, not CWNS) would be invisible in the *actual* prior even though the
 code path to include it exists. This section tests all of that empirically.
 
-**Method** (script: `emissions_point_source_audit.py`, no re-solve — reads
+**Method** (script: `scripts/emissions_point_source_audit.py`, no re-solve — reads
 M3T's packaged reference datasets, the staged GHGRP facility-location table,
 and `m3t_option_1.nc4` directly). For every real, named, geolocated facility
 in the raw M3T inputs (GHGRP landfills + LMOP for the landfill sector; CWNS,
@@ -1190,7 +1197,7 @@ residual cluster, though two sit on Long Island moderately near `728_2`'s
 cluster A: **Blydenburgh Road Landfill** (5.1km) and the **Town of
 Smithtown Municipal Services Facility** (11.2km). Full lists: `runs/
 emissions_point_source_audit_landfill.csv` / `_wastewater.csv`; map:
-`runs/emissions_point_source_audit_map.png`.
+`figures/emissions_point_source_audit_map.png`.
 
 **The mechanism behind all 10, diagnosed directly rather than guessed.**
 Comparing the 10 missing facilities against two confirmed-represented ones
@@ -1237,7 +1244,7 @@ mechanisms it led to) actually explain the residual.
 
 ### 22.1 Point-source test: do the two missing landfills explain it?
 
-**Method** (script: `landfill_gap_sensitivity_check.py`, no re-solve). Same
+**Method** (script: `scripts/landfill_gap_sensitivity_check.py`, no re-solve). Same
 regularized single-parameter Bayesian amplification test used throughout
 this investigation (§14/§16/§18), but anchored to something better than an
 arbitrary unit density for once: each facility's own last-reported GHGRP
@@ -1277,7 +1284,7 @@ regardless of tuning. §4.2 tested a genuinely continuous alternative (a
 per-receptor spatial GP, not one constant per leg) for `728_1` and found a
 real but plateauing ~11-12% RMS improvement — never re-run for `728_2`.
 
-**Method** (script: `continuous_kriging_check.py`, no re-solve). Standard GP
+**Method** (script: `scripts/continuous_kriging_check.py`, no re-solve). Standard GP
 regression (exponential kernel over great-circle distance) fit to the
 plane-only residual (`receptor_background − receptor_background_offset`,
 recovered directly from the saved bundle, no re-fit needed) at the
@@ -1312,7 +1319,7 @@ directly) — had never been tested against this specific residual using its
 real mechanism, as opposed to a hypothetical point source or a
 category-blind background surface.
 
-**Method** (script: `natural_gas_correlation_length_check.py`, no
+**Method** (script: `scripts/natural_gas_correlation_length_check.py`, no
 re-solve). Same regularized marginal-likelihood machinery as §15's
 landfill/wastewater sweep, scoped to `natural_gas` cells and `728_2`
 receptors near the gradient, with a much larger neighborhood than §15's
@@ -1367,9 +1374,9 @@ bundle) — so no established "on" threshold existed; `3.0σ` with
 `outlier_kind = innovation` (already the configured kind, §6's own
 recommended one) was used as a standard default.
 
-**Method** (`run_single_flight_best_params.sh`: 12 real solves, 6 flights ×
+**Method** (`scripts/run_single_flight_best_params.sh`: 12 real solves, 6 flights ×
 outlier off/on, `mdm_correlation_length_km=2.25` and leg offsets pinned on
-via the reference bundle's own config; `best_params_outlier_check.py`: no
+via the reference bundle's own config; `scripts/best_params_outlier_check.py`: no
 re-solve, compares residual stats and category scale factors against each
 other and against the earlier `runs/single_<fid>` baseline — 1.5km, no
 outlier filter — so the correlation-length change and the outlier change
@@ -1455,7 +1462,7 @@ uncertainty by roughly `√n` (less than that, to the exact extent they're
 correlated), turning a boring single-point deviation into a decisive
 aggregate one that the filter has no mechanism to see.
 
-### 24.2 Building the aggregate test directly (script: `leg_level_outlier_check.py`)
+### 24.2 Building the aggregate test directly (script: `scripts/leg_level_outlier_check.py`)
 
 For every leg (`detect_legs`) in every flight, tested whether the leg's
 *mean* posterior residual (`z − H·x̂` — the actual quantity in every
@@ -1505,7 +1512,7 @@ exists at the pooled level, not the single-receptor one. These legs span
 `726_1`, `728_1`, `728_2`, and `809` — i.e. leg-coherent structure this
 large isn't unique to the flights this investigation has focused on.
 
-### 24.3 Which of these were already there before fitting? (script: `leg_level_prior_vs_posterior_check.py`)
+### 24.3 Which of these were already there before fitting? (script: `scripts/leg_level_prior_vs_posterior_check.py`)
 
 Same pooled test, computed at both stages using the *same* `R_leg` (only
 the mean shifts between stages): `prior_leg_z` from the innovation
@@ -1748,6 +1755,89 @@ diagnostic/flagging tool — not worth wiring into automatic rejection.
     story. A deliberate modeling choice in M3T, not a bug in this
     investigation's own pipeline — but a real, named, checkable gap all the
     same.
+21. §28's leg-offset regressor sweep is a good example of a pooled-vs-
+    per-flight result actively misleading in opposite directions depending
+    which view is taken. Altitude looked like a strong explanation *within*
+    `726_1`/`726_2` alone (r=0.74, 0.90) but vanished pooled across flights
+    (r=0.10) once the collinearity with elapsed time inside a single
+    monotonically-descending flight was accounted for — a within-flight
+    correlation that isn't cross-flight evidence. The land/water result ran
+    the other way: pooling all 6 flights' receptors together made a real,
+    highly significant effect in every single flight (p from 0.016 to
+    3e-34) disappear entirely (p=0.20), because the sign of the effect
+    flips flight to flight — the per-flight table, not the pooled number,
+    was the one that mattered. Same general lesson as §25.11 and §25.19
+    (a plausible aggregate can hide or fabricate a real per-case pattern),
+    now demonstrated in both directions in one section.
+22. §29 is this investigation's first result built by correlating two
+    independently-derived per-flight quantities that share no machinery —
+    §20's footprint self-similarity decay length (pure STILT Jacobian
+    geometry) and this section's mixed-layer height (pure lidar backscatter
+    retrieval) — rather than testing one new mechanism against the existing
+    residuals directly. That independence is what makes the r=0.91
+    correlation meaningful despite only 6 data points: two unrelated
+    methods agreeing on the same flight ordering is a different, stronger
+    kind of evidence than one method's result looking plausible on its own.
+    The explicit leave-one-out check (dropping `809`, the extreme point in
+    both variables) is what separated the two MLH metrics that survived
+    (mean and max depth, still positively correlated and rank-significant
+    without `809`) from the one that didn't (within-survey MLH variability,
+    which collapsed from r=0.81 to r=0.19) — the same "don't trust a pooled
+    or small-sample number without stress-testing it" discipline as
+    §25.14/§25.21, applied here to a correlation instead of a regression
+    coefficient or a pooled group difference.
+23. §31's wind-shift-timing hypothesis came back null, at both a coarse
+    single-point-per-flight test and a properly-resolved per-leg one — and
+    that null didn't leave `805` back at "no leads": the same data that
+    ruled the hypothesis out also surfaced `805`'s uniquely light-and-erratic
+    modeled wind (circular direction std 62° vs. 16–33° elsewhere), found
+    only because the checks were run in enough detail to notice a pattern
+    outside the specific hypothesis being tested. Confirms §29's
+    methodological point from a different angle — a well-motivated
+    hypothesis being wrong is still worth testing rigorously, because the
+    byproduct of doing so can outlast the hypothesis itself.
+24. §30.2→§30.3 is this investigation's most consequential single-point-
+    sampling correction, and the clearest illustration yet of why §25.3's
+    "any new background-model idea must be tested with the honest fit_mask"
+    discipline generalizes beyond background modeling specifically: **any**
+    single-point stand-in for a spatially heterogeneous ~250km domain is
+    suspect, not just the background-fit case that discipline was
+    originally written for. The single-point comparison didn't just have
+    a noisier or weaker version of the right answer — it had the *specific
+    claim about `805`* backwards (best depth agreement of any flight, used
+    as evidence against depth bias explaining its residual, when receptor
+    resolution shows `805` has the second-worst mismatch). The correlation
+    result built on the same flawed single-point data (§30.2's footprint-
+    breadth correlation, `r=0.74`) turned out to be trustworthy anyway
+    (§30.3 reproduces it at `r=0.91`) — a reminder that a method's flaw
+    doesn't automatically invalidate every result it produced; each claim
+    needs checking on its own, not written off or trusted as a bundle.
+25. §30.1's confirmation that STILT uses HRRR's `HPBL` close to directly
+    (`zicontroltf=0`, `mlht` sampled per-particle, no override of HYSPLIT's
+    default of reading mixing depth from the driving model) is the first
+    time this investigation traced a footprint-behavior finding (§20, §29)
+    back to a specific, named STILT/HRRR configuration choice rather than
+    stopping at an empirical correlation. Worth remembering as a category
+    of check distinct from everything else in this document: reading the
+    actual transport-model configuration, not just re-analyzing its
+    outputs, turned a correlation into a mechanism.
+26. §30.4's per-flight (not per-day) faceting is what turned a modest
+    pooled correlation (`r≈-0.17`, a few percent of variance) into a
+    clean, spatially coherent, independently-repeated pattern (up to
+    `r=-0.50` within a single flight) — the pooled number alone would have
+    been easy to dismiss as noise. The reason this worked, and the reason
+    it's trustworthy, is the same reason §25.11/§25.19/§25.21 keep
+    recurring in this document: day-to-day (here, weather-to-weather)
+    variability was diluting a real within-day signal, not creating a
+    fake one, and the only way to tell the difference was to look at each
+    flight on its own before pooling, not just check whether pooling
+    changed a p-value. `809`'s clean break from the other five flights'
+    shared pattern is the same principle again, one level up: a plausible
+    reason to worry the whole SW/NE gradient was a track-geometry artifact
+    (§30.3's leg-axis caveat) was substantially defused not by a new
+    statistical test, but by noticing that the one flight sharing the
+    exact same track geometry as the rest was also the one flight that
+    *didn't* share the pattern.
 
 ## 26. Suggestions for future analysis
 
@@ -1862,6 +1952,85 @@ diagnostic/flagging tool — not worth wiring into automatic rejection.
     `805`'s own cluster (≈40.80,−74.37); the nearest hits are on Long
     Island, near `728_2` instead. `805` specifically still needs its own
     targeted look, and (c) remains completely untested for every flight.
+12. **Read the raw XCH4 retrieval's own QA/channel flags directly** — still
+    the one part of hypothesis (c) no script in this investigation has
+    touched. §28 approached (c) indirectly via the already-fit leg offsets
+    and found two real, independent leads instead of the column data
+    itself: an elapsed-time-since-takeoff transient (significant pooled,
+    p=0.031, but only individually significant in 2 of 6 flights) and a
+    per-flight land/water contrast in the within-leg residual (significant
+    in *every* flight, p as low as 3e-34, but sign-flipping by flight in a
+    way that argues for a real, synoptically-varying atmospheric cause
+    rather than a fixed instrument artifact — §28.5). Neither explains
+    `805`, specifically, on its own: `805` is one of the two flights
+    *without* an individually-significant elapsed-time trend, though it
+    does show one of the two largest land/water splits (alongside `809`).
+    Next step: check whether `805`'s land/water-flagged legs coincide with
+    its specific open residual locations (§9), and separately pull the
+    actual raw retrieval QA flags (cloud screening, weighting-function
+    quality, SSE confidence) at those same locations — direct access to
+    (c) rather than another indirect proxy.
+13. **Extend §29.4's footprint-depth correlation beyond 6 points.** The
+    mean/max mixed-layer-height correlation with footprint decay length
+    (r=0.79–0.91, Spearman-significant even excluding `809`) is credible
+    but structurally limited to one point per flight from this campaign
+    alone. ~~A meteorological reanalysis product (e.g. HRRR's own
+    boundary-layer-height field...) would give an independent depth
+    estimate to cross-check against the lidar-derived MLH used here~~
+    **Done, §30 — HRRR's `HPBL` pulled and compared directly, confirmed
+    (§30.1) to be essentially the mixing depth STILT's transport actually
+    uses.** Reproduces the correlation (r=0.74, Spearman p=0.042) using
+    the real driving meteorology, and finds a systematic, same-sign
+    depth-overestimate bias on every flight (§30.2) — but at only one
+    domain point per flight, still not the many-times/many-locations
+    version this item originally asked for; that remains open if more
+    statistical power is wanted than six flight-level numbers can give.
+14. **Check whether `805`'s open residual sits in a shallower-boundary-
+    layer regime than `809`'s.** §29's status update already notes `805`'s
+    boundary layer is less extreme than `809`'s, consistent with §20's
+    finding that footprint resolution explains `809` but not `805` — worth
+    confirming directly (not just by contrast with §29.2's summary table)
+    whether `805`'s specific residual locations (§9) sit during its
+    survey's shallower or deeper MLH legs, which would sharpen (or rule
+    out) a partial footprint-breadth contribution to `805`'s still-open
+    case. (§30.2 initially seemed to add a second, independent reason to
+    deprioritize depth bias as `805`'s driver — its HRRR-vs-HALO agreement
+    looked like the best of any flight — but §30.3's receptor-resolution
+    correction reversed that specifically: `805` actually has the
+    second-worst mismatch. That removes a reason to rule depth *out*
+    without adding one to rule it *in*; this item's original framing
+    stands on its own regardless.)
+15. **Check `805`'s specific residual locations against its wind-field
+    instability, not just its wind-shift timing.** §31 ruled out the
+    original wind-*shift*-timing-mismatch hypothesis (no leg-level
+    correlation), but surfaced `805`'s uniquely light and directionally
+    erratic modeled wind (circular direction std 62° vs. 16–33° elsewhere)
+    as an unexamined, better-targeted candidate. Not yet tested against
+    `805`'s specific open residual locations (§9) the way item 14 proposes
+    for boundary-layer depth — the natural next step, and currently the
+    single most promising untested lead for `805` specifically.
+16. **Pull the real STILT particle-trajectory `mlht` values, if
+    accessible, instead of an independently-fetched copy of HRRR's
+    `HPBL`.** §30.1 establishes with high confidence (from this repo's own
+    run-script configuration) that STILT uses HRRR's mixing depth close to
+    directly, but the actual per-particle `mlht` field from the original
+    runs (which would live in `out_hrrr/` on the HPC scratch space named
+    in `stilt/run_stilt_nyc_hrrr.r`, not available in this local repo) has
+    never been read. That would remove any remaining ambiguity about
+    whether the Zarr-archive copy of `HPBL` used in §30.2 matches what
+    STILT's ARL-converted input actually contained, and would settle
+    §30.1's one open caveat (drawn from HYSPLIT/STILT's documented general
+    behavior, not verified against the STILT package's own source, which
+    isn't checked out in this repo).
+17. **Read the raw XCH4 retrieval's own QA/channel flags directly — now
+    the single most overdue item on this list.** Every meteorological
+    thread pursued in §28–§31 (elapsed time, land/water, mixed-layer
+    height, HRRR boundary-layer bias, wind speed/direction/shift) has come
+    back either null or only a partial, indirect proxy for hypothesis (c).
+    None of them has actually opened the column-data files' own QA fields.
+    That remains completely untouched for every flight, and is now the
+    most direct remaining path to (c) rather than another indirect
+    meteorological angle.
 
 ## 27. Configuration reference
 
@@ -1973,3 +2142,566 @@ new finding — a map of the ones already made.
   (§9) — any new diagnostic touching posterior flux must multiply by
   density to get an actual flux perturbation, not diff the raw state
   block against the density map directly.
+
+## 28. Leg-offset regressors: elapsed-time drift, altitude, terrain, and land/water
+
+§20's three-phase attack closed out hypothesis (a) (footprint shape) for
+`809` but not `805`, and §25's takeaways leave hypothesis (c) — systematic
+errors in the raw column data itself — as the one candidate this entire
+investigation had never tested, for any flight. This section is a first,
+indirect attempt at (c): rather than the raw XCH4 retrieval and its QA
+flags directly (not yet accessed by any script in this investigation), it
+asks whether the already-fit **leg offsets** (§2.2) — the per-leg additive
+background level, estimated independently of the flux solve — carry a
+systematic dependence on anything instrument- or surface-side, as opposed
+to being pure atmospheric noise. A dependence there would be indirect
+evidence for something upstream of the inversion (instrument response or a
+surface-dependent retrieval effect) rather than a modeling gap in
+`halo_oe` itself.
+
+### 28.1 Elapsed time since *actual* takeoff, not since the NYC-clipped window starts
+
+**Correction made before anything else:** the Jacobian-aligned flight files
+in `flight_data/` are clipped to the NYC lawnmower survey only — they drop
+each flight's climb-out and transit leg entirely. The gap between true
+takeoff (`Nav_Data/gps_time`, minimum, in the unclipped `_full.h5` product)
+and the first receptor in the clipped file is not small or uniform: 63.0
+min (`726_1`), 37.1 min (`726_2`), 38.2 min (`728_1`), 36.8 min (`728_2`),
+70.8 min (`805`), 65.3 min (`809`). Any elapsed-time analysis using the
+clipped file's own first timestamp as "time zero" is silently measuring
+time since an arbitrary, flight-varying point, not time since takeoff — a
+mistake worth flagging explicitly since it is easy to make and does not
+fail loudly. All elapsed-time numbers below are corrected for this.
+
+### 28.2 Method (script: `scripts/leg_offset_drift_check.py`, no re-solve)
+
+Reads `runs/legtest_legoffset_6flight`'s saved `receptor_background_offset`
+(the already-fit, GP-smoothed leg offset — §2.2) directly from the bundle
+for all 6 flights; no Jacobian, no re-fit. For each flight, re-derives leg
+segmentation (`detect_legs`, same config) and averages the offset, elapsed
+time (§28.1), `flight_alt`, and — newly pulled from the unclipped file —
+`UserInput/DEM_altitude` (ground elevation, matched to each clipped
+receptor by nearest GPS time) per leg, giving one row per leg (52 legs
+across 6 flights). Every regression below pools across flights after
+subtracting each flight's own mean offset, so it tests whether a *shape*
+of dependence is shared across flights with very different absolute
+background levels, tracks, and start times — not whether any one flight
+alone shows a trend.
+
+### 28.3 Results: elapsed time and terrain elevation are real; altitude and clock time are not
+
+| regressor | pooled r | pooled p | note |
+|---|---|---|---|
+| elapsed time since takeoff | −0.299 | 0.031 | only 2 of 6 flights individually significant (`726_1` p=0.038, `726_2` p=0.0008); `728_2` marginal (p=0.060) |
+| absolute clock time (UTC) | −0.120 | 0.398 | not significant — argues against a diurnal/boundary-layer explanation |
+| aircraft altitude (MSL) | +0.098 | 0.49 | not significant pooled, despite looking strong *within* `726_1`/`726_2` alone (r=0.74, r=0.90) — those two flights simply descend monotonically through their whole survey, so altitude and elapsed time are collinear within them; across flights with different descent profiles the altitude relationship does not hold up |
+| surface (DEM) elevation under receptor | −0.306 | 0.027 | as strong as elapsed time, and **not** the same signal: corr(elapsed time, surface elevation) = +0.08 pooled, and a joint regression keeps both terms significant independently (elapsed time p=0.040, surface elevation p=0.035, joint R²=0.17, n=52) |
+| altitude above ground level (range-to-target) | +0.107 | 0.448 | not significant — rules out a laser-range/path-length explanation specifically |
+
+Two independent, non-redundant leads survive: elapsed time since takeoff,
+and terrain elevation under the receptor. Both are modest in absolute
+size (elapsed time: −0.007 ppm/hr; terrain: −0.25 ppm/km, i.e. roughly a
+0.02–0.05 ppm swing across the NYC domain's ~0–200m relief) and neither
+alone explains much variance — but both are statistically real and clearly
+distinct mechanisms, worth carrying forward separately rather than
+collapsing into one story.
+
+### 28.4 Is the terrain-elevation effect actually a land/water split? (script: `scripts/land_water_background_check.py`)
+
+`DEM_altitude` is cleanly bimodal over the NYC domain: land receptors carry
+a real GLOBE elevation (≈10m and up), water receptors (harbor, rivers,
+Long Island Sound) carry a flat `-1.0` sentinel with nothing in between —
+so a simple threshold (`WATER_SENTINEL = -0.5`) gives an unambiguous
+per-receptor land/water flag, motivating a direct check of whether §28.3's
+continuous terrain-elevation result is really a land/water contrast.
+
+**Leg-level (each leg's water fraction vs. its fitted offset, same pooling
+as §28.3): no.** Pooled alone: r=+0.057, p=0.69. Added to the elapsed-time
+regression it contributes nothing (p=0.51, vs. elapsed time still p=0.028).
+So §28.3's terrain-elevation result is driven by continuous relief among
+*land* legs (e.g. coastal-flatland vs. higher inland terrain), not a
+land/water step.
+
+**Receptor-level, within-leg (the sharper test): yes, and strongly — but
+with a sign that flips by flight.** For every receptor, take the
+pre-leg-smoothing residual (`obs - plane_background`, the same quantity
+`fit_leg_offsets` operates on — §2.2) and subtract that leg's own mean,
+removing the leg's overall fitted level entirely; this asks only whether
+water and land receptors disagree systematically *within* a leg, using
+every receptor (not one number per leg) and needing no cross-flight
+pooling to have power:
+
+| flight | n water | n land | mean water (ppm) | mean land (ppm) | diff (ppm) | t | p |
+|---|---|---|---|---|---|---|---|
+| `726_1` | 297 | 822 | −0.0025 | +0.0009 | −0.0034 | −2.41 | 0.016 |
+| `726_2` | 261 | 776 | +0.0032 | −0.0011 | +0.0043 | +2.66 | 0.008 |
+| `728_1` | 281 | 720 | −0.0048 | +0.0019 | −0.0067 | −3.55 | 0.0004 |
+| `728_2` | 297 | 832 | −0.0125 | +0.0045 | −0.0169 | −10.26 | 6e-23 |
+| `805` | 400 | 945 | +0.0029 | −0.0012 | +0.0041 | +5.07 | 5e-7 |
+| `809` | 245 | 876 | +0.0114 | −0.0032 | +0.0146 | +13.39 | 3e-34 |
+
+Every flight shows a highly significant land/water contrast within its own
+legs — this is not noise. But the sign is not consistent: negative for
+`726_1`/`728_1`/`728_2`, positive for `726_2`/`805`/`809`, with no evident
+pattern by date, by flight-of-day (F1 vs. F2), or by local time of day.
+Naively pooling all 6 flights' receptors together (ignoring flight
+identity) makes the effect vanish (diff=−0.0008 ppm, t=−1.29, p=0.20) —
+the signs cancel — which is why the per-flight table above, not a single
+pooled number, is the result that matters here; see
+`figures/land_water_background_check.png` for both views side by side.
+
+### 28.5 Interpretation
+
+A land/water contrast that is real and large on every flight but flips
+sign between flights is inconsistent with a fixed instrument or retrieval
+artifact (a genuine surface-reflectivity or lidar-return bias tied to
+water vs. land should point the same direction every time it's present).
+It is much more consistent with a real, synoptically-varying atmospheric
+effect — e.g. land/sea-breeze circulation or day-specific boundary-layer
+contrast between the harbor/Sound and the urban/inland surface, either of
+which would plausibly flip sign with wind direction and synoptic pattern
+on a given flight day. That reframes this finding: not a bug in the
+background model or retrieval to fix, but a real atmospheric structure
+that a single per-leg constant offset (§2.2) is not built to represent,
+and a plausible *contributor* — not the resolution — to `805`'s and
+`809`'s still-open residual structure, since both show the two largest
+land/water splits of the six flights.
+
+Net addition to hypothesis (c): still not directly tested (no script in
+this investigation has yet read the raw XCH4 retrieval's own QA/channel
+flags), but two indirect leads are now on the table with real statistical
+support — an elapsed-time-since-takeoff transient present in roughly half
+the flights, and a per-flight, sign-varying land/water contrast present in
+all six — that a future column-data QA check should be run alongside, not
+instead of.
+
+## 29. Mixed-layer height: a real land/water mechanism, and a footprint-breadth correlation
+
+§28 left the land/water contrast in the leg offsets attributed to "a real,
+synoptically-varying atmospheric effect" without a measured mechanism
+behind it. This section pulls a real boundary-layer-depth product
+(`CH4DataProducts/MixedLayerHeight`, a lidar backscatter-derived mixed-layer
+height, `m AGL`, present in the unclipped flight files but not used
+anywhere else in this investigation) to test that directly, motivated by a
+question about whether the six flights' split into three morning surveys
+(~9:30am–12:45pm EDT: `726_1`, `728_1`, `805`) and three afternoon surveys
+(~1–4:45pm EDT: `726_2`, `728_2`, `809`) shows a "complex transport"
+signature — and finds one, though not primarily a morning/afternoon one.
+
+### 29.1 The dominant MLH signal is land/water, not time of day
+
+**Method** (script: `scripts/mixed_layer_height_check.py`, no re-solve, no
+Jacobian). For each flight, matched `MixedLayerHeight` to the NYC survey
+window (the clipped file's own time range) and binned it into 10-minute
+medians across that window, split into the morning/afternoon groups above.
+
+**Result: every flight's raw MLH time series is a sawtooth, not a smooth
+diurnal curve** (`figures/mixed_layer_height_check.png`) — swings of several
+hundred meters on a ~10–15 minute cycle, too fast to be boundary-layer
+growth. That cycle matches the lawnmower survey's leg-crossing cadence, not
+time of day, and a direct check confirms why: **every one of the 6
+flights, without exception, shows the boundary layer running substantially
+shallower over water than over land** — 407 to 625m shallower, every
+flight individually significant at `p ≈ 0` (Welch's t, `t` from −46 to
+−163, `n` in the thousands per class per flight). This is a real,
+physically-expected marine/coastal-vs-continental contrast, and it
+directly grounds §28.4's land/water finding: every flight really does fly
+through a systematically different boundary-layer depth over water, giving
+a physical mechanism for why *some* land/water CH4-background contrast
+should exist on every flight, even though (§28.5) the specific *sign* of
+that contrast varies flight to flight in a way more consistent with
+day-specific wind direction than a fixed depth effect on its own (§29.3
+tests, and rules out, MLH depth itself as a direct predictor of that sign).
+
+### 29.2 After removing the land/water step, morning flights show real growth; afternoon flights do not behave uniformly
+
+**Method.** Same binning, restricted to land-only receptors
+(`DEM_altitude > -0.5`) to remove the §29.1 step and isolate any real
+within-flight temporal trend, with a linear fit against elapsed local time.
+
+| flight | group | land MLH start → end (m) | slope (m/hr) | p |
+|---|---|---|---|---|
+| `726_1` | morning | 553 → 689 | +149 | 0.078 |
+| `728_1` | morning | 564 → 1129 | +207 | 0.007 |
+| `805` | morning | 868 → 1259 | +86 | 0.012 |
+| `726_2` | afternoon | 1059 → 1647 | +157 | 0.018 |
+| `728_2` | afternoon | 1435 → 1427 | −6 | 0.934 |
+| `809` | afternoon | 1810 → 1608 | −144 | 0.071 |
+
+All three morning flights show real (mostly significant) boundary-layer
+growth through their survey window — the expected morning-growth
+signature, present on every morning flight. The afternoon flights are the
+more genuinely "complex" group, and not uniform: `726_2` is still growing
+significantly as late as 4:42pm; `728_2` has already plateaued by 2:17pm;
+`809` — the flight whose survey starts closest to solar noon (1:01pm) and
+runs into mid-afternoon (4:09pm), matching the original question most
+closely — starts at the *highest* boundary-layer depth of any flight all
+day (1810m) and *declines* through its survey window, a transitioning
+regime none of the other five flights show.
+
+### 29.3 MLH itself does not predict leg-level CH4 bias, linear or quadratic
+
+**Method** (script: `scripts/mlh_bias_regression_check.py`, no re-solve). Per leg,
+per flight, regressed both the fitted leg background offset (§2.2/§28) and
+the posterior residual (`z − Hx̂`) against land-only MLH and against
+elapsed time since takeoff, fitting linear and quadratic models (pooled
+across flights, flight-demeaned, same convention as §28) and F-testing
+whether the quadratic term earns its keep over a straight line.
+
+**Result: a clean null for MLH itself, in both bias targets, at both
+orders.** Background offset vs. MLH: `R² = 0.003`, `p = 0.71` (linear);
+quadratic term `p = 0.99`. Posterior residual vs. MLH: `R² = 0.006`,
+`p = 0.59`; quadratic term `p = 0.88`. Visually
+(`figures/mlh_bias_regression_check.png`) both MLH panels are flat noise —
+no relationship at any curvature tried. This is worth stating plainly: even
+though land/water crossing drives a large, universal boundary-layer-depth
+swing (§29.1), that depth's *magnitude* does not leave a detectable,
+functional-form-agnostic imprint on either bias target — if boundary-layer
+structure drives the land/water CH4 effect, it is not through mean leg-level
+depth in any simple form, more likely through wind/advection direction (as
+§28.5 already suspected).
+
+Elapsed time reproduces §28's linear result for the background offset
+exactly (`slope = −0.0069` ppm/hr, `R² = 0.089`, `p = 0.031`); a quadratic
+term adds curvature (`R² → 0.121`) but is not significant (`p = 0.19`).
+The one place curvature shows up at all is the posterior residual against
+elapsed time (linear `p = 0.15`, not significant; quadratic term
+`p = 0.073`, `R² : 0.041 → 0.102`) — a hump shape, worth flagging as
+suggestive but not established, since at `n = 52` pooled legs it is
+visibly shaped by a couple of points at the elapsed-time extremes
+(`728_1`'s two earliest legs, `809`'s latest legs) rather than a trend most
+legs participate in.
+
+### 29.4 Footprint breadth correlates with boundary-layer depth across all 6 flights
+
+**Motivation.** §20 Phase 1 found `809`'s footprint self-similarity decay
+length (19.6km) a clean outlier against the other five flights (7.9–12.9km),
+with no mechanism offered beyond "a real, outlier-broad intrinsic decay
+length." §29.2 independently found `809` also has the deepest and only
+declining boundary layer of the six flights. Two independently-derived
+per-flight quantities — one built purely from STILT footprint cosine
+similarity, the other purely from the lidar backscatter product, with no
+shared machinery — agreeing would be real evidence that boundary-layer
+depth drives footprint breadth, not a coincidence specific to `809`.
+
+**Method** (script: `scripts/footprint_mlh_correlation_check.py`, no re-solve). Six
+data points (one per flight): §20's decay length against each flight's
+mean and max land-only MLH during its survey window (§29.2's summary
+statistics), Pearson correlation plus an explicit leave-one-out check
+dropping `809` — the extreme point in both variables — to separate a real
+trend across all 6 flights from a coincidence involving only `809`.
+
+| metric | r (all 6) | p (all 6) | r (excl. `809`) | p (excl. `809`) | Spearman ρ | p |
+|---|---|---|---|---|---|---|
+| mean land-only MLH | +0.79 | 0.061 | +0.68 | 0.20 | +0.83 | 0.042 |
+| max land-only MLH | **+0.91** | **0.013** | +0.84 | 0.076 | +0.89 | 0.019 |
+| MLH std during survey | +0.81 | 0.051 | +0.19 | 0.76 | +0.60 | 0.21 |
+
+**Result: real, and not just a `809` artifact — with one exception that
+is.** Peak boundary-layer depth correlates strongly with footprint decay
+length (`r = 0.91`), and the relationship survives dropping `809`
+(`r = 0.84`, Spearman still significant at `p = 0.019`) — the other five
+flights' footprint decay lengths track their boundary-layer depths in the
+same direction too (`728_1`: shallowest BL, shortest decay length; `726_2`:
+deep BL, long decay length), which is the more convincing part of this
+result than `809` alone. Mean MLH is a similar, slightly weaker story.
+**MLH variability during the survey (std) is the one metric that does
+*not* survive** — it looks comparably strong pooled (`r = 0.81`) but
+collapses to `r = 0.19` with `809` excluded, i.e. that particular
+correlation really is just "`809` is extreme in both quantities," not a
+pattern the other five flights participate in — flagged explicitly since
+it would have been easy to over-report alongside the two metrics that
+hold up.
+
+**Verdict:** this connects §20's empirical, meteorology-free
+footprint-resolution finding to a real, physically coherent mechanism for
+the first time — deeper daytime boundary layers plausibly permit more
+turbulent horizontal dispersion, broadening STILT's footprint and worsening
+along-track resolution — and shows `809` sits at the extreme end of a real
+6-flight trend rather than being an isolated anomaly. With only 6 data
+points this is a credible, worth-recording lead rather than a proven
+result; a larger multi-day dataset (or an independent meteorological
+reanalysis of boundary-layer depth, rather than this campaign's own lidar
+retrieval) would be needed to treat it as established.
+
+## 30. HRRR's own boundary-layer height vs. HALO's lidar MLH — the mixing depth STILT actually uses
+
+§29 correlated footprint breadth with HALO's *independently measured*
+boundary-layer depth. This section asks the more mechanistically direct
+question: does HRRR's own `HPBL` — confirmed below to be essentially the
+mixing-depth field STILT's transport actually runs on, not just a loosely
+related external quantity — agree with HALO's lidar MLH, and does that
+matter for the still-open flights specifically?
+
+### 30.1 STILT uses HRRR's `HPBL` close to directly
+
+Confirmed from this repo's own STILT run configuration
+(`stilt/run_stilt_nyc_hrrr.r`, and its sibling `run_stilt_*.r` scripts),
+not assumed: `varsiwant` includes `mlht`, the per-particle mixing-depth
+value HYSPLIT/STILT samples along every trajectory, and `zicontroltf <- 0`
+disables STILT's mixing-depth smoothing correction (a known STILT feature
+for limiting artificial jumps at hourly meteorology updates). With it off,
+STILT uses the **raw, un-smoothed, step-function mixing depth straight
+from HRRR's own hourly field** for every trajectory in this investigation
+— combined with HYSPLIT's default of reading mixing depth from the driving
+model's own field (nothing in these run scripts overrides that default to
+force an internally-recomputed diagnostic instead), this makes HRRR's
+`HPBL` the operative vertical-mixing boundary shaping every Jacobian used
+throughout this document, not an independent point of comparison.
+(Caveat: this is drawn from HYSPLIT/STILT's documented general behavior
+and this repo's own config, not verified against the STILT R package's
+source directly — it isn't checked out in this repo.)
+
+### 30.2 A single-point comparison suggested a one-directional bias — corrected below, this was wrong
+
+**First pass** (script: `scripts/hrrr_pblh_vs_mlh_check.py`, no re-solve). Pulled
+hourly analysis `HPBL` from the public NOAA HRRR Zarr archive on AWS
+(`s3://hrrrzarr`, anonymous access; no HRRR data exists locally in this
+repo otherwise) at **one representative NYC-domain point** (40.75, −73.95),
+matched to each flight's survey-window hours, and compared against §29.2's
+land-only binned-median HALO MLH. That comparison showed HRRR running
+higher than HALO on every single flight (+4% to +31%), with `805` the
+smallest-bias flight — and an initial verdict was drawn from it (HRRR
+over-predicts boundary-layer depth systematically; `805`'s good agreement
+argues against depth bias explaining its residual).
+
+**That verdict does not survive testing at receptor resolution, and is
+retracted here rather than left standing.** §30.3 redoes the comparison
+matching every individual receptor to its own nearest HRRR grid cell and
+hour, instead of one point for the whole flight — the obvious fix given
+§29.1 already established real, large spatial HPBL structure (the
+land/water split) across this same ~250km domain that a single point
+cannot see. The corrected result reverses the specific, single-point
+finding above; keeping the original framing here (rather than silently
+replacing it) is deliberate, per §25.6's rule that a surprising,
+consequential finding needs independent verification before being acted
+on — this is that verification, and it changed the answer.
+
+### 30.3 Receptor-resolution result: no systematic depth bias; a real land/water split instead
+
+**Method** (script: `scripts/hrrr_pblh_vs_mlh_receptor_check.py`, no re-solve).
+Every receptor (all 6 flights, `n=7459`) matched to its own nearest HRRR
+grid cell via a KDTree over the static ~1059×1799 HRRR lat/lon grid, and
+its own nearest HRRR analysis hour — not one point/hour standing in for
+the whole flight. Compared against that same receptor's own HALO lidar MLH
+(nearest-GPS-time matched, same convention as `scripts/mlh_bias_regression_check.py`).
+Each unique `(date, hour)` HPBL grid fetched once and reused across every
+receptor/flight that falls in it, to keep remote reads manageable.
+
+| flight | n receptors | mean HALO | mean HRRR | ratio | bias | (single-point bias, §30.2) |
+|---|---|---|---|---|---|---|
+| `726_1` | 1256 | 573m | 539m | 0.94 | **−34m** | +107m |
+| `726_2` | 1127 | 1257m | 1155m | 0.92 | **−102m** | +311m |
+| `728_1` | 928 | 710m | 755m | 1.06 | +45m | +264m |
+| `728_2` | 1286 | 1273m | 1151m | 0.90 | **−121m** | +235m |
+| `805` | 1350 | 942m | 775m | 0.82 | **−167m** | +40m |
+| `809` | 1512 | 1497m | 1816m | 1.21 | +318m | +343m |
+
+**Result: the systematic, one-directional bias is gone.** Pooled across
+all 7459 receptors, mean bias is −2m (median −14m) — essentially zero.
+Four of six flights now show HRRR running *shallower* than HALO, not
+deeper — the opposite sign from §30.2's single-point result for 3 of
+those 4 (`726_1`, `726_2`, `728_2`). The scatter (`runs/
+hrrr_pblh_vs_mlh_receptor_check.png`, left panel) shows a real, significant
+positive correlation between HALO and HRRR (`r=0.667, p≈0`) with
+substantial two-sided scatter around the 1:1 line — over- and
+under-estimates roughly balance out in aggregate, which is exactly why
+the single-point sample (one location, unluckily biased toward
+over-estimation at that specific cell) looked like a clean one-directional
+effect when it wasn't one.
+
+**`805`'s specific verdict reverses, and the "good agreement argues
+against depth bias" claim from §30.2 does not hold.** At receptor
+resolution `805` has the *second-worst* relative mismatch of the six
+flights (−18%, behind only `809`'s +21%) — not the best, as the
+single-point sample suggested. The negative cross-check argument in the
+original §30.2 verdict is retracted; `805`'s residual and its
+boundary-layer depth bias are, if anything, now more plausibly connected,
+not less. This doesn't reopen depth bias as `805`'s confirmed explanation
+— no test in this document has directly regressed `805`'s specific
+residual locations against its receptor-level HPBL bias — but it removes
+a piece of evidence that had been used to argue against it.
+
+**A real, different, and more specific finding replaces the retracted
+one: land vs. water receptors show significantly different HRRR bias**
+(`t=6.94, p=5×10⁻¹²`). Land receptors are roughly unbiased (+22m); water
+receptors show HRRR under-predicting by −81m on average
+(`figures/hrrr_pblh_vs_mlh_receptor_check.png`, right panel). This is a
+plausible, specific mechanism — HRRR's ~3km native grid likely cannot
+resolve the actual marine/harbor/Sound boundary-layer structure the way
+it resolves land, especially given how narrow much of the relevant water
+(East River, the Sound's coastline) is relative to that grid spacing — not
+a general entrainment-scheme depth bias. Worth noting: this land/water
+HPBL bias is a different quantity from §29.1's land/water *contrast in
+HALO's own MLH* (a real atmospheric signal) or §28.4's land/water
+*contrast in the fitted CH4 background offset* (still unexplained,
+sign-flipping by flight) — three related but distinct land/water findings
+now on record; not yet checked against each other directly.
+
+**Correlation with §29.4's footprint-breadth result holds up, and
+slightly strengthens, at receptor resolution.** Per-flight mean HRRR HPBL
+(receptor-resolution) vs. §20's footprint decay length: `r=0.91, p=0.013`
+— matching §29.4's HALO-based result almost exactly, and effectively
+unchanged from §30.2's single-point number (`r=0.74`) despite that
+number's own flight-level bias values being substantially wrong. Per-flight
+mean HALO MLH at receptor resolution (all receptors, not just land-only):
+`r=0.81, p=0.049`, also consistent with §29.4. **This is the one part of
+§30's original analysis that survives the correction intact** — the
+footprint-breadth/boundary-layer-depth relationship was never dependent on
+getting the single point right.
+
+**Verdict.** §30.2's "HRRR systematically over-predicts, `805` agrees
+best" finding was an artifact of an unrepresentative single sampling
+point and is withdrawn. In its place: no systematic depth bias at
+receptor resolution (pooled bias ≈ 0), `805` actually has one of the
+*larger* relative mismatches (removing it as counter-evidence against
+depth bias, though not establishing it as the cause either), a real and
+specific land/water HPBL bias plausibly tied to HRRR's native grid
+resolution near the coast, and the boundary-layer-depth/footprint-breadth
+correlation (§29.4) confirmed to be robust to this correction. Caveat
+carried forward: lidar-derived MLH (aerosol-backscatter-gradient proxy)
+and model HPBL (turbulence-scheme diagnostic) remain not-identically-defined
+quantities even at receptor resolution — a documented, general
+boundary-layer-verification phenomenon — so the residual scatter in the
+1:1 plot is not purely "HRRR error."
+
+### 30.4 Beyond land/water: a real southwest-to-northeast gradient, and `809` breaks it
+
+§30.3's land/water split raised the natural next question: is the
+mismatch structured *within* land (or water) too, as a continuous spatial
+gradient, rather than just a two-category step?
+
+**Method** (script: `scripts/hrrr_pblh_vs_mlh_gradient_check.py`, no re-solve;
+extends §30.3's per-receptor matching by keeping each receptor's lat/lon
+and terrain elevation instead of collapsing to a summary). Pooled
+receptor-level linear correlations against latitude/longitude, a
+land-only regression against terrain elevation (linear + quadratic), and
+a spatially binned mean-bias map (0.15°/0.2° cells, minimum-count
+thresholded) — computed pooled, per flight (6 panels, not per day —
+`726_1`/`726_2` and `728_1`/`728_2` kept separate), and for the
+morning/afternoon groups (§29.2).
+
+**Result: a real, moderate-strength gradient pooled, but a strong and
+strikingly consistent one within individual flights.** Pooled: bias vs.
+latitude `r=-0.18` (`p=4e-54`), vs. longitude `r=-0.17` (`p=1e-47`) —
+highly significant given `n=7459`, but each explains only a few percent
+of receptor-level variance on its own; the binned map
+(`figures/hrrr_pblh_vs_mlh_gradient_check.png`) shows why the raw correlation
+understates it — a clean ~500–600m swing from strongly positive
+(HRRR too deep) in the domain's southwest (inland NJ/Staten Island) to
+strongly negative (too shallow) in the northeast (toward Long Island
+Sound), once per-receptor noise is averaged out spatially. Land-only bias
+vs. terrain elevation is real but small and non-monotonic (`r=+0.05,
+p=0.0005` linear; quadratic term `p=2e-6` — bias rises slightly with
+elevation to ~150m, then turns back down at the highest elevations
+sampled, thin data there).
+
+**Per-flight breakdown (`figures/hrrr_pblh_vs_mlh_gradient_by_flight.png`,
+one panel per flight, not per day) confirms this is a real, repeatable
+regional pattern — not a pooling artifact, and not a single-day fluke.**
+Five of six flights (`726_1`, `726_2`, `728_1`, `728_2`, `805`)
+independently show the *same* qualitative SW-positive/NE-negative
+gradient, and the correlation is markedly stronger within a single flight
+than pooled (e.g. `728_1` vs. longitude: `r=-0.50, p=8e-59`) — day-to-day
+noise was diluting the pooled number, not manufacturing a false pattern.
+Both the morning and afternoon groups
+(`figures/hrrr_pblh_vs_mlh_gradient_morning_afternoon.png`) show the same
+underlying gradient too, ruling out a time-of-day-specific explanation.
+
+**`809` is the one flight that breaks the pattern, not a stronger version
+of it.** Instead of a SW/NE gradient, its map is almost uniformly positive
+(HRRR too deep nearly everywhere it flew), and it's the only flight whose
+longitude correlation flips sign (`r=+0.235`, vs. negative on every other
+flight). This is consistent with, and adds to, `809`'s already-established
+pattern of meteorological distinctiveness (§29.2's deepest and only-
+declining boundary layer, §30.3's largest single-flight depth bias,
+`WIND_VARIABILITY.md`'s highest wind speed) — one more way this flight's
+day was a genuinely different regime from the other five, not an extreme
+point on a shared spectrum.
+
+**Resolves §30.3's leg-axis caveat, at least partially.** §30.3 flagged
+that the gradient runs along nearly the same axis as the survey's own
+NE/SW leg orientation (`leg_axis_deg=45°`), raising the possibility that
+part of the pattern reflected flight-track geometry (e.g. along-leg
+position or timing) rather than real geography. That the gradient's
+*character* is shared across five independently-flown days, while `809`
+— flying essentially the same track geometry as the others — shows a
+completely different spatial pattern instead of the same one more
+strongly, argues for a real, day-varying meteorological signal being
+sampled along that track, not a track-shape artifact. Not a complete
+resolution — a formal regression against along-leg vs. cross-leg position
+was not built — but a meaningfully strong piece of evidence against the
+artifact explanation.
+
+**Verdict.** A real, spatially coherent, physically plausible gradient
+(consistent with a genuine regional HRRR bias pattern, e.g. differential
+skill inland vs. near the Sound) sits underneath §30.3's land/water split,
+confirmed repeatable across 5 of 6 independently-flown days. `809`'s
+break from that pattern is now a third independent axis (alongside
+boundary-layer depth and wind character, §29 and §31) on which it stands
+apart from the other five flights — worth treating as its own distinct
+meteorological regime for any future analysis, not folded into a
+"6-flight average" picture.
+
+## 31. HRRR 10m wind vs. residual bias: no leg-level relationship, but `805` is uniquely light and erratic
+
+Motivated by whether wind changes during a survey could create a mismatch
+between STILT's modeled transport and the real flow, manifesting as
+elevated residuals on legs near a modeled wind shift. Full per-flight and
+per-leg wind characterization (method, rotation correction, caveats, and
+the complete 52-leg table) lives in
+[WIND_VARIABILITY.md](WIND_VARIABILITY.md), kept separate since it's
+useful beyond this specific question; this section covers only the
+residual-relevant tests and their results.
+
+**Method** (scripts: `scripts/hrrr_wind_bias_check.py`, single point/hour per
+flight; superseded by `scripts/hrrr_wind_leg_change_check.py`, each leg's own
+receptor-centroid location and nearest HRRR hour — see
+WIND_VARIABILITY.md for why the per-leg version is preferred). Regressed
+leg background offset and posterior residual against wind speed and
+against `(u, v)` components jointly, and specifically tested whether a
+bigger leg-to-leg wind-direction *change* coincides with a bigger
+`|residual|` on that leg.
+
+**Result: no support for the wind-shift-mismatch hypothesis, at either
+resolution tested.** Signed regressions: offset vs. speed `r=+0.03,
+p=0.84`; vs. `(u,v)` jointly `R²=0.007, p=0.85`. Posterior residual vs.
+speed `r=-0.003, p=0.98`; vs. `(u,v)` jointly `R²=0.006, p=0.86`. The
+specific leg-to-leg-change test: `|posterior residual|` vs. `|Δ wind
+direction|` gives `r=-0.24` (`p=0.11`, not significant, and the *wrong*
+sign for the hypothesis — bigger direction jumps trend toward smaller, not
+larger, residuals); `|Δ wind speed|` similarly null (`r=-0.10, p=0.51`).
+This held at both the earlier single-point-per-flight resolution and the
+per-leg-location, per-leg-hour resolution — not a resolution artifact of
+the coarser first pass.
+
+**But `805`'s modeled wind is a real, distinct outlier, independent of
+that null result.** Its circular direction standard deviation (62°) is
+2–4× every other flight's (16–33°; full table in
+[WIND_VARIABILITY.md](WIND_VARIABILITY.md)), swinging through nearly the
+full compass leg to leg while every other flight rotates smoothly and
+modestly. Its wind is also among the lightest of the six flights (mean
+2.2 m/s, several legs under 1 m/s, where direction becomes numerically
+noisy — a caveat on the precise degree values, not on the light-and-unsteady
+character itself).
+
+**Verdict.** The specific mechanism proposed (wind-shift timing mismatch
+between legs) isn't supported by the leg-level data. `805`'s uniquely
+light-and-erratic modeled wind is nonetheless a new, distinct, and
+better-targeted candidate on its own terms: a light-and-variable flow is
+inherently harder for any hourly NWP analysis to represent accurately
+(small absolute errors in a weak, unsteady wind have an outsized effect on
+transport direction), independent of boundary-layer depth. (An earlier
+draft of this verdict additionally leaned on §30.2's finding that `805`
+had the best HRRR-vs-HALO depth agreement of any flight, treating this as
+a second, complementary reason depth-independent instability specifically
+should get priority; §30.3's receptor-resolution correction reversed that
+premise — `805` is actually one of the worse depth-agreement flights — so
+that additional support is withdrawn. The light-and-erratic-wind lead
+itself doesn't depend on it and stands regardless.) This reframes `805`'s
+open status from "no remaining leads" to "simple wind-shift timing is
+ruled out; wind-field *instability* itself, not yet directly tested
+against `805`'s specific residual locations, is a candidate alongside
+boundary-layer depth (§30.3), not in place of it" — still an indirect
+proxy for hypothesis (c), not a direct test of the column data, which
+remains completely untouched.

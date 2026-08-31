@@ -1,0 +1,67 @@
+source,id,name,lat,lon,value,represented
+GHGRP,1000429.0,pennsauken sanitary landfill,39.9889,-75.0417,5.48600244140625,True
+GHGRP,1001581.0,edgemere landfill,40.602435,-73.762495,2.1176962890625,True
+GHGRP,1002010.0,de solid waste authority cherry island,39.732754,-75.517487,17.71912890625,True
+GHGRP,1002125.0,blydenbugh road landfill,40.8153846,-73.2116584,0.0,False
+GHGRP,1002232.0,chrin brothers landfill,40.663618,-75.231488,6.54722900390625,True
+GHGRP,1002292.0,harford waste disposal center,39.6395,-76.2971,4.155759765625,True
+GHGRP,1002391.0,lanchester landfill,40.10555,-75.94746,2.35750244140625,True
+GHGRP,1002556.0,conestoga landfill,40.123384,-75.895918,9.799916015625,True
+GHGRP,1002667.0,ocean county landfill,40.025251,-74.249391,4.644203125,True
+GHGRP,1002716.0,western berks comm ldfl & recycling ctr/ birdsboro,40.300479,-75.911187,2.267749267578125,True
+GHGRP,1002786.0,greater lebanon refuse ldfl,40.36323,-76.49439,0.9415840454101563,True
+GHGRP,1002796.0,hartford landfill,41.792361,-72.651569,0.7404495849609375,True
+GHGRP,1002843.0,fresh kills landfill,40.565216,-74.193377,8.1122724609375,True
+GHGRP,1003100.0,modern landfill,39.960561,-76.5925,7.37782666015625,True
+GHGRP,1003163.0,brookfield avenue landfill,40.561669,-74.160196,0.7268803100585938,True
+GHGRP,1003231.0,sullivan county landfill,41.643889,-74.662417,0.0,False
+GHGRP,1003460.0,grand ctl sani,40.853502,-75.257496,2.57281298828125,True
+GHGRP,1003503.0,dauphin meadows inc/millersburg muni waste ldfl,40.54814,-76.875251,0.0,False
+GHGRP,1003521.0,frey farm-creswell ldfl,39.958319,-76.436708,1.2186591796875,True
+GHGRP,1003556.0,waste mgmt dspl svc of pa pottstown ldfl,40.270359,-75.654282,0.33248138427734375,True
+GHGRP,1003867.0,windsor bloomfield landfill,41.89323,-72.708993,0.23401364135742186,True
+GHGRP,1003937.0,bethlehem landfill company,40.622025,-75.303509,4.7897822265625,True
+GHGRP,1004095.0,warren county district landfill,40.8249,-75.0179,0.0,False
+GHGRP,1004173.0,town of north hempstead port washington landfill,40.81805,-73.66666,0.7295701904296875,True
+GHGRP,1004184.0,manchester landfill,41.7738,-72.5647,7.265908203125,True
+GHGRP,1004218.0,lycoming county resource management services,41.15135,-76.91791,6.946498046875,True
+GHGRP,1004235.0,gloucester county solid waste complex,39.711816,-75.282182,2.198587158203125,True
+GHGRP,1004413.0,comm env sys ldfl,40.67014,-76.38261,0.0,False
+GHGRP,1004587.0,former town of babylon landfill,40.718142,-73.353185,2.556356201171875,True
+GHGRP,1004637.0,town of smithtown municipal services facility,40.867708,-73.251183,0.0,False
+GHGRP,1004653.0,fountain avenue landfill,40.655212,-73.86203,0.7278447265625,True
+GHGRP,1004741.0,kinsley\s landfill,39.794667,-75.1045,0.0,False
+GHGRP,1004812.0,cecil county central landfill,39.594758,-75.916937,4.62736962890625,True
+GHGRP,1004823.0,al turi landfill & lfgte facility,41.40646,-74.37313,3.514694091796875,True
+GHGRP,1004897.0,de solid waste authority pigeon point,39.70551,-75.53284,1.7160855712890626,True
+GHGRP,1005034.0,sussex cnty mua slf 1e,41.092306,-74.677528,1.4652471923828125,True
+GHGRP,1005054.0,monmouth county reclamation center,40.25119,-74.10812,18.26023046875,True
+GHGRP,1005254.0,southbridge recycling & disposal park,42.10516,-72.03195,1.1302708740234375,True
+GHGRP,1005733.0,delaware cnty swa/rolling hills muni waste ldfl,40.360718,-75.712263,8.8000068359375,True
+GHGRP,1006021.0,chemung county landfill,42.032962,-76.679228,2.495294189453125,True
+GHGRP,1006196.0,brookhaven landfill & recycling area,40.797178,-72.930442,0.729353759765625,True
+GHGRP,1006261.0,keystone sanitary landfill,41.427594,-75.592816,4.47138134765625,True
+GHGRP,1006390.0,edgeboro landfill,40.4735,-74.3862,0.661807861328125,True
+GHGRP,1006684.0,linden city slf,40.6029,-74.2456,0.7273084106445312,True
+GHGRP,1006969.0,burlington cnty resource recovery complex,40.0758,-74.7617,3.810685791015625,True
+GHGRP,1007225.0,landfill and development company,39.982525,-74.771594,0.0936825180053711,True
+GHGRP,1007261.0,salem county improvement authority landfill,39.5879,-75.3697,5.2677451171875,True
+GHGRP,1007298.0,middlesex county landfill,40.474236,-74.394844,11.096138671875,True
+GHGRP,1007615.0,grows ldfl waste mgmt,40.159344,-74.776695,14.791130859375,True
+GHGRP,1007616.0,pine grove ldfl inc/pine grove landfill,40.572899,-76.3868797,0.0,False
+GHGRP,1007634.0,tullytown resource recover facility (trrf) landfill,40.133394,-74.804474,2.32019921875,True
+GHGRP,1007645.0,alliance sani ldfl,41.3965,-75.7375,4.07602490234375,True
+GHGRP,1007669.0,chicopee sanitary landfill,42.16711,-72.54246,0.5220147705078125,True
+GHGRP,1007948.0,bondi island landfill,42.09104,-72.59748,0.7438899536132813,True
+GHGRP,1007953.0,interstate waste removal parklands reclm slf,40.1272,-74.7111,0.07346878051757813,True
+GHGRP,1007976.0,bradford county landfill,41.7769,-76.6285,4.77934130859375,True
+GHGRP,1008010.0,waste management of ct inc new milford,41.5492,-73.4291,0.0,False
+GHGRP,1009136.0,kingsland landfill,40.7892,-74.1133,1.4584912109375,True
+GHGRP,1009137.0,njmc 1-e landfill,40.775058,-74.123042,1.4256649169921876,True
+GHGRP,1009925.0,seccra community landfill,39.8651,-75.8437,2.92459765625,True
+GHGRP,1010845.0,croton landfill,41.19521,-73.88813,2.246532470703125,True
+GHGRP,1011037.0,pioneer crossing landfill,40.276135,-75.817615,3.5687646484375,True
+GHGRP,1011227.0,orange county landfill,41.401082,-74.392336,4.021582275390625,True
+GHGRP,1011381.0,kearny msla : 1-d landfill,40.749546,-74.135772,7.19116162109375,True
+GHGRP,1011391.0,northern landfill,39.54819,-76.94363,0.0,False
+LMOP,,Bridgeport LF,41.156309,-73.210176,0.7332835693359375,True
