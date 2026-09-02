@@ -1838,6 +1838,33 @@ diagnostic/flagging tool — not worth wiring into automatic rejection.
     statistical test, but by noticing that the one flight sharing the
     exact same track geometry as the rest was also the one flight that
     *didn't* share the pattern.
+27. §30.5's first pass is a useful reminder that even a mechanistically
+    better proxy (footprint-weighted water fraction instead of receptor
+    position) doesn't automatically help every relationship it's applied
+    to — it made the HPBL-bias correlation nearly twice as strong but,
+    at leg-level aggregation, appeared to do nothing for the CH4 side.
+    Worth remembering as a general caution against assuming "the better
+    version of this test will surely show something everywhere": whether
+    a more careful measurement helps depends on whether measurement
+    crudeness was actually the limiting factor for *that specific*
+    relationship. But (see item 28) this particular null didn't survive
+    either — a second lesson stacked on the first.
+28. §30.5→§30.6 caught an aggregation artifact stacked on top of item 27's
+    lesson: the leg-level CH4-residual null wasn't really a null — it was
+    52 legs' worth of averaging hiding a real, `r=-0.165`,
+    `p=2.5×10⁻⁵⁰` receptor-level (`n=8078`) effect. §30.6 then found *why*
+    a linear correlation and a leg-average both nearly missed it: the
+    relationship isn't a smooth dose-response like the HPBL bias
+    (§30.6's HPBL bins decline steadily across the whole range) — it's a
+    threshold effect, flat until roughly the top quartile of footprint
+    water fraction and only clearly negative above that. A coarse,
+    linear-only test is exactly the kind of check that misses a threshold
+    effect concentrated in a minority of the data (here, mostly `728_1`/
+    `728_2`) while a smooth dose-response elsewhere in the same
+    investigation shows up easily in the same crude test — two real
+    effects, same investigation, needing different levels of scrutiny to
+    detect, discovered only because both were checked past the first
+    (null-looking) pass rather than accepting either result at face value.
 
 ## 26. Suggestions for future analysis
 
@@ -2031,6 +2058,20 @@ diagnostic/flagging tool — not worth wiring into automatic rejection.
     That remains completely untouched for every flight, and is now the
     most direct remaining path to (c) rather than another indirect
     meteorological angle.
+18. **Check whether `728_1`/`728_2`'s specific open residual locations (§9)
+    coincide with their highest-footprint-water-fraction receptors.**
+    §30.6 found a real, threshold-like effect of footprint water fraction
+    on the post-fit residual, concentrated above roughly the top quartile
+    of footprint water fraction and statistically significant specifically
+    for `728_1`/`728_2` (§30.5's majority-water-vs-land table) — but this
+    was tested against the *whole-flight* residual, not against those two
+    flights' own already-identified broad-gradient clusters (§5, §9). If
+    the high-water-fraction receptors driving this effect spatially
+    overlap those clusters, that would be a much stronger, spatially
+    specific result than the current whole-flight statistical one; if they
+    don't overlap, the effect is real but unrelated to this document's
+    original motivating residuals for those two flights, and would need
+    its own explanation for what it *is* connected to.
 
 ## 27. Configuration reference
 
@@ -2642,6 +2683,170 @@ boundary-layer depth and wind character, §29 and §31) on which it stands
 apart from the other five flights — worth treating as its own distinct
 meteorological regime for any future analysis, not folded into a
 "6-flight average" picture.
+
+### 30.5 Footprint composition (not receptor position) predicts the HPBL bias much more strongly — and a real, if narrower, CH4 effect too
+
+§28.4/§29/§30.3/§30.4 all classified a receptor by the terrain *directly
+under the aircraft* at the moment of measurement. That's not actually the
+physically relevant quantity — a receptor's measured enhancement (and,
+mechanistically, the mixing depth relevant to it) reflects its **footprint**:
+the upwind STILT sensitivity field, which can be mostly over water even for
+a receptor currently flying over land, or vice versa, depending on that
+day's wind. This section tests the more direct version of the land/water
+question for both biases this investigation has tracked: does *footprint*
+water fraction (continuous, not binary) predict the CH4 background bias
+(§28.4) and/or the HRRR-HPBL-vs-HALO-MLH bias (§30.3) better than receptor
+position did?
+
+**Method** (script: `scripts/footprint_land_water_check.py`, no re-solve —
+reads each flight's full Jacobian once, ~10s for a 12.6GB file, via the
+existing `JacobianFile.receptor_column_sums` streaming infrastructure).
+Built a water mask on the Jacobian's own ~1666×1666 (~1km) footprint grid
+by nearest-matching every cell (KDTree, <1s for 2.78M cells) to HRRR's own
+static `LAND` field (`hrrrzarr/sfc/.../surface/LAND/surface`, same source/
+resolution as §30's `HPBL` and §31's wind, for consistency). For each
+receptor, `receptor_column_sums(weights={"water": water_mask})` gives the
+fraction of its total footprint-weighted sensitivity that falls over water
+— continuous in `[0, 1]`, unlike the binary label used everywhere else in
+this investigation. This is a **footprint-sensitivity-weighted** fraction,
+not a simple count of land vs. water grid cells the footprint's extent
+happens to cover: for each receptor it is `Σ_cell H[receptor, cell] ·
+water_mask[cell] / Σ_cell H[receptor, cell]`, i.e. weighted by the actual
+STILT sensitivity (`H`, the Jacobian row) at every cell. A receptor whose
+footprint barely grazes a large water body gets a small water fraction
+(low sensitivity there); one whose footprint is concentrated over a
+smaller but high-sensitivity water area gets a larger one — the correct
+way to ask "how much of what this receptor actually measured came from
+over water," as opposed to "how much water geography did the footprint's
+bounding area happen to contain." Regressed leg-mean footprint water fraction against
+leg background offset and posterior residual (flight-demeaned, same
+convention as §28/§29), and receptor-level footprint water fraction
+against the receptor-level HRRR-HALO HPBL bias (§30.3's construction,
+recomputed here to pair with each receptor's own footprint).
+
+**Result: a much stronger, cleaner signal for the meteorological bias.**
+Receptor-level footprint water fraction vs. HPBL bias: `r=-0.30`,
+`p=5×10⁻¹⁵⁹` (`n=7459`) — nearly double the strength of §30.4's lat/lon
+gradients (`r≈-0.18`) and vastly more significant, with the same sign
+(more water in the footprint → HRRR increasingly *under*-predicts relative
+to HALO). This is a real improvement in mechanistic specificity, not just
+a restatement of the land/water split: it ties the mismatch to a
+receptor's actual upwind transport history rather than to where the plane
+happened to be at that instant, and is consistent with (rather than
+redundant with) §30.4's spatial gradient — footprint composition is a more
+direct proxy for "how much marine air did this measurement actually
+integrate over" than static position or coordinates.
+
+**Result at leg-level aggregation: apparently a clean null for the CH4
+side — but this turned out to be an aggregation artifact, corrected
+below.** Leg-mean footprint water fraction vs. leg background offset:
+`r=+0.15`, `p=0.28` (`n=52`, not significant); vs. leg-mean posterior
+residual: `r=-0.03`, `p=0.83` (nothing). Per-flight, five of six flights
+show a positive but individually non-significant trend on the background
+offset (`r=0.21`–`0.53`, `n=8`–`10` legs each — too few to reach
+significance alone); `809` is again the outlier, flipping negative
+(`r=-0.43`), consistent with its pattern of standing apart in §29–§31.
+
+**Corrected: the posterior residual does have a real receptor-level
+effect — averaging down to 52 legs washed it out.** Re-run at full
+receptor resolution (all `n=8078` receptors, flight-demeaned, no leg
+averaging): footprint water fraction vs. posterior residual gives
+`r=-0.165`, `p=2.5×10⁻⁵⁰` — small (`r²≈3%`) but statistically
+unambiguous given the sample size. The leg-background-offset result does
+**not** get the same correction: it stays null at receptor resolution too
+(§30.6 below shows no consistent trend at any water percentage). So the
+two CH4-side quantities behave differently — the post-fit residual
+(the quantity every "is this flight explained" claim in this document is
+actually about) carries a real, if modest, footprint-water signature; the
+upstream background-offset estimate does not.
+
+**A majority-water-vs-majority-land split (closer to §28.4's original
+binary framing) is only testable for half the flights**, because
+footprints that are truly >50% water are rare (mean footprint water
+fraction per flight ranges only 7–20%, per §30.5's own numbers):
+
+| flight | n majority-water | mean diff (water − land), ppm | p |
+|---|---|---|---|
+| `726_1` | 0 | — | untestable |
+| `726_2` | 27 | +0.0035 | 0.20 (opposite sign, n.s.) |
+| `728_1` | 13 | **−0.0117** | **0.0007** |
+| `728_2` | 18 | **−0.0095** | **0.044** |
+| `805` | 0 | — | untestable |
+| `809` | 0 | — | untestable |
+| pooled | 58 | −0.0040 | 0.067 (marginal) |
+
+`728_1` and `728_2` — both still-open flights — show a real, individually
+significant negative effect; `726_2` (already explained) trends the
+opposite direction but isn't significant; `726_1`, `805`, `809` never
+have enough majority-water footprint receptors to test at all. This
+matches, rather than contradicts, the earlier land/water investigations:
+the effect is real but concentrated in specific flights, not a uniform
+six-flight pattern — the same character as §28.4's sign-flipping result,
+just now localized to a subset of flights instead of alternating sign
+across all six.
+
+### 30.6 The two biases have different shapes: a smooth dose-response for HPBL, a threshold effect for the CH4 residual
+
+**Method** (script: `scripts/footprint_land_water_bins_check.py`, no
+re-solve, no network access — pure re-analysis of §30.5's saved per-
+receptor dataset, `figures/footprint_land_water_fractions.csv`). Binned
+all three targets (post-fit residual, leg background offset, HRRR-HALO
+HPBL bias) against footprint water fraction using ~8 equal-count quantile
+bins (roughly 1000 receptors per bin, for even statistical power across a
+skewed distribution — most receptors sit under 20% footprint water
+fraction, so fixed-width bins above ~50% are nearly empty) plus fixed
+10%-wide bins to show where the data actually concentrates.
+
+**Result: the HPBL bias is a clean, near-monotonic dose-response across
+the whole range.** Quantile-bin means fall steadily from `+88m` (lowest
+water-fraction bin) to `-370m` (highest, >26% water), declining through
+every intermediate bin with tight confidence intervals (`n≈900-1000` per
+bin throughout) — not a threshold effect concentrated at one end, and not
+an artifact of the linear fit reported in §30.5: the real relationship
+looks genuinely close to linear across the observed range.
+
+**Result: the CH4 posterior residual behaves differently — flat, then a
+late, sharp drop.** The first six quantile bins (0-21% water) wobble
+between roughly `-0.001` and `+0.005` ppm with overlapping confidence
+intervals — no discernible pattern there. It turns clearly and
+significantly negative only in the top two bins (21-26% water: `-0.0026`
+ppm; 26-76% water: `-0.0100` ppm, the tightest and most negative point on
+the plot). This explains §30.5's majority-water-vs-land table directly:
+the effect is real but concentrated at the *high* end of footprint water
+fraction, which is exactly why it only shows up as testable/significant
+for `728_1`/`728_2` — the two flights whose footprints reach furthest
+into that high-water regime — and is invisible in a plain linear
+correlation or a coarse leg-level average that mixes high- and low-water
+receptors together.
+
+**Result: the leg background offset shows no pattern at any water
+percentage.** Bin means bounce between `-0.006` and `+0.002` ppm with
+overlapping confidence intervals throughout the whole range
+(`figures/footprint_land_water_bins_check.png`, middle panel) — confirms
+the null holds everywhere, not just when tested linearly or at a single
+50% split.
+
+**Verdict.** Footprint composition is now the best-supported single
+predictor found in this investigation for the HRRR-vs-HALO boundary-layer
+mismatch — stronger than raw position, terrain elevation, or the lat/lon
+gradient (§30.4) — reinforcing that §30's bias is a real, physically
+specific effect (plausibly HRRR's ~3km grid failing to resolve marine/
+coastal boundary-layer structure) rather than noise, and shaped like a
+smooth dose-response rather than a threshold. On the CH4 side the picture
+is more nuanced than either the original binary test (§28.4) or the first
+pass at this section suggested: the background-offset estimate genuinely
+shows nothing, at any resolution or water percentage tried; but the actual
+post-fit residual carries a real, if modest, effect that only appears once
+a footprint's water fraction crosses roughly the top quartile — a
+threshold-like, not smooth, relationship, and concentrated in `728_1`/
+`728_2` specifically. §28.4's original sign-flipping land/water contrast
+in the background offset remains unexplained by any static land/water
+measure tried so far (receptor position, §28.4; footprint composition,
+§30.5) — still consistent with §28.5's read that the background-offset
+effect specifically is wind-*direction*-dependent rather than a fixed
+spatial pattern. The post-fit-residual effect found here is a distinct,
+new, and more actionable lead: worth checking directly against `728_1`/
+`728_2`'s specific open residual locations (§9, §26 item 1).
 
 ## 31. HRRR 10m wind vs. residual bias: no leg-level relationship, but `805` is uniquely light and erratic
 

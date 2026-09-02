@@ -66,6 +66,7 @@ __all__ = [
     "fit_leg_offsets",
     "flag_leg_edge_discontinuities",
     "flag_footprint_discontinuities",
+    "flag_water_affected_footprints",
     "receptor_background",
 ]
 
@@ -360,6 +361,53 @@ def flag_footprint_discontinuities(jacobian_file, config, fid: str | None = None
         relative_threshold=config.get_float("background", "discontinuity_relative_threshold", default=0.5),
         min_leg_size=config.get_int("background", "discontinuity_min_leg_size", default=6),
     )
+
+
+def flag_water_affected_footprints(jacobian_file, config) -> np.ndarray:
+    """Per-receptor mask for receptors whose *footprint* is water-heavy, or all-``False`` when disabled.
+
+    Motivation: RESIDUAL_INVESTIGATION.md §30.5/§30.6 found the receptor's
+    footprint-weighted water fraction (how much of its upwind STILT
+    sensitivity falls over water, not just the terrain directly under the
+    aircraft) is a strong predictor of the HRRR-vs-HALO boundary-layer
+    mismatch, and a real (if smaller, threshold-like) effect on the post-fit
+    residual concentrated above roughly the top quartile of footprint water
+    fraction. The working hypothesis is that transport (STILT/HRRR) is what's
+    biased for these receptors, not the observations themselves — so this is
+    a hard exclusion candidate for the flux-fitting solve, exactly like
+    :func:`flag_footprint_discontinuities`, and **not** a background
+    correction: it runs independently of, and after, background subtraction
+    (:func:`receptor_background`), so a water-affected receptor still
+    contributes to estimating the background level, just not to constraining
+    the flux state.
+
+    Reads ``[background] flag_water_footprint`` (default ``False``); when
+    enabled, streams the full Jacobian once (``JacobianFile.receptor_column_sums``,
+    the same cheap pattern used throughout this investigation — no operator
+    materialization beyond what the solve already needs) weighted by a
+    precomputed land/water mask on the Jacobian's native grid (see
+    ``scripts/build_jacobian_water_mask.py``; default path
+    ``scratch_hrrr/jacobian_grid_water_mask.npy``, water=1/land=0, one mask
+    covers every flight since they share an identical native grid — verified,
+    not assumed), and flags receptors whose footprint water fraction exceeds
+    ``[background] water_footprint_threshold`` (default ``0.20``).
+    """
+    n = jacobian_file.n_receptors
+    if not config.get_bool("background", "flag_water_footprint", default=False):
+        return np.zeros(n, dtype=bool)
+    mask_path = config.get("background", "water_mask_path",
+                            default="scratch_hrrr/jacobian_grid_water_mask.npy")
+    water_mask = np.load(mask_path)
+    if water_mask.shape[0] != jacobian_file.n_cells:
+        raise ValueError(
+            f"water mask at {mask_path!r} has {water_mask.shape[0]} cells, "
+            f"expected {jacobian_file.n_cells} to match this flight's Jacobian grid"
+        )
+    threshold = config.get_float("background", "water_footprint_threshold", default=0.20)
+    sums = jacobian_file.receptor_column_sums(
+        active=np.arange(jacobian_file.n_cells), weights={"water": water_mask})
+    footprint_water_frac = sums["water"]["total"] / sums["uniform"]["total"]
+    return footprint_water_frac > threshold
 
 
 def fit_leg_offsets(

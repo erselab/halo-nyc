@@ -42,7 +42,7 @@ from adapters.scaling_blocks import category_blocks, offset_block
 
 from .obs_error import build_obs_error_covariance
 
-from .background import flag_footprint_discontinuities, receptor_background
+from .background import flag_footprint_discontinuities, flag_water_affected_footprints, receptor_background
 from .buffer import build_buffer
 from .decomposition import (
     assemble_category_scalar_state,
@@ -167,7 +167,8 @@ def load_context(cfg: Config, inventories, flights=None) -> InversionContext:
             base_f = jf.operator(active=core.active, in_memory=in_memory, row_chunk=row_chunk)
         sens = base_f.matvec(np.ones(core.n_active))
         bg_f, bg_offset_f = receptor_background(jf, cfg, domain_sensitivity=sens, fid=fid)
-        disc_masks.append(flag_footprint_discontinuities(jf, cfg, fid=fid))
+        disc_masks.append(flag_footprint_discontinuities(jf, cfg, fid=fid)
+                           | flag_water_affected_footprints(jf, cfg))
         obs_f = build_observations(jf.receptor_obs, error_stddev=error_stddev,
                                    baseline=bg_f, error_inflation=inflation)
         R_f = (build_obs_error_covariance(jf.receptor_lat, jf.receptor_lon, cfg)
