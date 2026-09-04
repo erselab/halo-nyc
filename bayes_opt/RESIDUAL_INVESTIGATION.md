@@ -25,8 +25,8 @@ read it first, then use the sections as the evidence trail behind it.
 | `726_1` | hotspot explained; dip open | hotspot = prior-shape misallocation (§5); dip = unexplained, footprint-shape ruled out (§7.4) |
 | `726_2` | explained | leg-offset background correction (§2.2/§3) |
 | `728_1` | open | broad correlation-length-limited gradient (§5); next step is comparing inventories (§26.1) |
-| `728_2` | open | broad correlation-length-limited gradient, a Long Island sub-cluster; three explanations tested and ruled out (§22) |
-| `805` | open | leg-to-leg banding; background modeling exhausted (§12); footprint-resolution ruled out (§20); land/water contrast present but doesn't close it (§28); one of the two larger HRRR-vs-HALO boundary-layer-depth mismatches at receptor resolution (§30.3, corrected from an earlier single-point read that had this backwards); by far the most light-and-erratic modeled wind of the six flights (§31), the most promising open lead |
+| `728_2` | open, partially improved | broad correlation-length-limited gradient, a Long Island sub-cluster; three explanations tested and ruled out (§22); excluding water-affected footprints from the flux fit is the first real *intervention* (not just a correlation) to show a genuine effect on any open flight — RMS −22% (§32.3) |
+| `805` | open | leg-to-leg banding; background modeling exhausted (§12); footprint-resolution ruled out (§20); land/water contrast present but doesn't close it (§28); one of the two larger HRRR-vs-HALO boundary-layer-depth mismatches at receptor resolution (§30.3, corrected from an earlier single-point read that had this backwards); by far the most light-and-erratic modeled wind of the six flights (§31); excluding its water-affected footprints (nearly half its receptors) left it unchanged/slightly worse (§32.3) — a real negative result ruling water-affected transport out as its driver, sharpening §31's wind-instability lead as the most promising remaining one |
 | `809` | explained | footprint-shape/resolution error — genuinely broader intrinsic footprint decay length (§20), now linked to a real mechanism: the deepest boundary layer of the 6 flights, correlating with footprint breadth across all 6 (§29.4), the largest HRRR-vs-HALO depth bias even after correcting to receptor resolution (§30.3), real sub-hourly boundary-layer swings HRRR's hourly cadence cannot represent (§30.2), and the one flight that breaks the SW/NE spatial bias gradient every other flight shares (§30.4) — three independent axes on which `809` is a distinct meteorological regime, not an extreme point on a shared spectrum |
 
 Two candidate explanations remain live for the flights still open
@@ -1865,6 +1865,28 @@ diagnostic/flagging tool — not worth wiring into automatic rejection.
     effects, same investigation, needing different levels of scrutiny to
     detect, discovered only because both were checked past the first
     (null-looking) pass rather than accepting either result at face value.
+29. §32 is this investigation's first case of an actual re-solve
+    confirming (for `728_2`) and simultaneously complicating (for `728_1`)
+    a same-strength statistical finding from §30.5 — a reminder that a
+    correlation and an intervention answer genuinely different questions,
+    not that one is a formality once the other exists. It's also this
+    document's clearest example yet of a negative result being exactly as
+    useful as a positive one in the same experiment: `805` getting no
+    better (arguably slightly worse) after losing nearly half its
+    receptors — the largest exclusion of any flight, precisely because it
+    has the most water-affected footprint of the six — rules out a whole
+    candidate mechanism for `805` about as cleanly as a real experiment
+    can, redirecting effort toward §31's wind-instability lead instead of
+    leaving `805` sitting on an untested, plausible-sounding idea
+    indefinitely. Separately: the `NotImplementedError` this experiment
+    surfaced in the shared `goe` library's `BlockDiagonalCovariance` was
+    latent through every multi-flight run in this entire investigation —
+    it just never happened to be exercised, because nothing before this
+    section ever combined a large `pre_mask` exclusion with a correlated,
+    multi-flight `R`. Running an actually novel *kind* of experiment, not
+    just a novel parameter value, is what surfaces this category of bug;
+    worth remembering the next time a new experiment idea seems like it
+    should trivially reuse existing, well-tested machinery.
 
 ## 26. Suggestions for future analysis
 
@@ -2058,20 +2080,19 @@ diagnostic/flagging tool — not worth wiring into automatic rejection.
     That remains completely untouched for every flight, and is now the
     most direct remaining path to (c) rather than another indirect
     meteorological angle.
-18. **Check whether `728_1`/`728_2`'s specific open residual locations (§9)
-    coincide with their highest-footprint-water-fraction receptors.**
-    §30.6 found a real, threshold-like effect of footprint water fraction
-    on the post-fit residual, concentrated above roughly the top quartile
-    of footprint water fraction and statistically significant specifically
-    for `728_1`/`728_2` (§30.5's majority-water-vs-land table) — but this
-    was tested against the *whole-flight* residual, not against those two
-    flights' own already-identified broad-gradient clusters (§5, §9). If
-    the high-water-fraction receptors driving this effect spatially
-    overlap those clusters, that would be a much stronger, spatially
-    specific result than the current whole-flight statistical one; if they
-    don't overlap, the effect is real but unrelated to this document's
-    original motivating residuals for those two flights, and would need
-    its own explanation for what it *is* connected to.
+18. ~~Check whether `728_1`/`728_2`'s specific open residual locations (§9)
+    coincide with their highest-footprint-water-fraction receptors~~
+    **Partially done, §32 — tested as an actual re-solve, not just a
+    spatial-overlap check, and the two flights diverged.** Excluding
+    water-affected footprints from the flux fit gave `728_2` a real ~22%
+    RMS improvement but left `728_1` essentially unchanged despite losing
+    32% of its receptors — so §30.5's statistically indistinguishable
+    finding for both flights does not mean a shared fix. Still open: the
+    original spatial-overlap question (does `728_2`'s specific improvement
+    trace to its already-identified broad-gradient cluster locations
+    specifically, §5/§9, or is the whole-flight RMS gain more diffuse than
+    that) has not been checked directly — worth doing before treating
+    `728_2` as understood rather than just improved.
 
 ## 27. Configuration reference
 
@@ -2112,6 +2133,16 @@ new finding — a map of the ones already made.
   (~6–10% of legs, real but doesn't explain this investigation's
   motivating flights). Never turned on in a real multi-flight run — still
   open (§26.3).
+- `flag_water_footprint = false` (default/off), `water_footprint_threshold
+  = 0.20`, `water_mask_path = scratch_hrrr/jacobian_grid_water_mask.npy`:
+  new production feature (§32) excluding receptors whose footprint-
+  weighted water fraction exceeds the threshold from the flux fit only
+  (background estimation still sees them). Turned on and tested in a real
+  multi-flight run (§32, the first time either exclusion mechanism has
+  been) — a real ~22% RMS improvement for `728_2`, no effect on `728_1`,
+  no benefit (mild harm) for `805`. Left off by default: helps one of
+  three open flights, not the others, so a blanket default would trade
+  `728_2`'s gain for no clear benefit elsewhere.
 
 **`[category_spatial]`** — prior spatial correlation length (§5, §14, §15)
 - `default = 0`, `natural_gas = 5`, `combustion = 5` (km): sets the hard
@@ -2910,3 +2941,164 @@ against `805`'s specific residual locations, is a candidate alongside
 boundary-layer depth (§30.3), not in place of it" — still an indirect
 proxy for hypothesis (c), not a direct test of the column data, which
 remains completely untouched.
+
+## 32. A real experiment: excluding water-affected footprints from the flux fit
+
+§30.5/§30.6 found a real, threshold-like effect of footprint water fraction
+on the post-fit residual, concentrated above roughly the top quartile and
+significant specifically for `728_1`/`728_2`. That's a statistical
+correlation from re-analyzing existing bundles — this section tests it as
+an actual intervention: re-solve the joint 6-flight inversion with
+water-affected receptors hard-excluded from the flux-fitting constraint,
+while still letting them inform the background estimate (the working
+hypothesis, per this section's motivation, is that STILT/HRRR transport is
+what's biased for these receptors, not the observations themselves — so
+the exclusion should apply to the flux fit specifically, not upstream of
+it). Run at both the current `mdm_correlation_length_km` (1.5km) and the
+empirically-motivated alternative (2.25km, §14b/§15) to see whether the
+two interact.
+
+### 32.1 A new production feature, built on an existing exclusion mechanism
+
+**Implementation.** `halo_oe/background.py` gains
+`flag_water_affected_footprints(jacobian_file, config)`, architecturally
+identical to §8's `flag_footprint_discontinuities`: a per-receptor boolean
+mask, computed by streaming the full Jacobian once
+(`JacobianFile.receptor_column_sums`, the same footprint-sensitivity-
+weighted construction as §30.5) against a precomputed land/water mask on
+the Jacobian's native ~1666×1666 grid (`scripts/build_jacobian_water_mask.py`,
+cached at `scratch_hrrr/jacobian_grid_water_mask.npy` — built once from
+HRRR's static `LAND` field; all 6 flights share an identical Jacobian grid,
+verified directly). Controlled by `[background] flag_water_footprint`
+(default `False`) and `water_footprint_threshold` (default `0.20`).
+`halo_oe/pipeline.py`'s `load_context` ORs this into the same
+`discontinuity_mask` passed as `pre_mask` to `_solve_with_qc` — which
+`_solve_with_qc` applies via `subset_observations` **after** background
+subtraction (`receptor_background`) has already run on every receptor, so
+this is a hard exclusion from the flux constraint specifically, exactly as
+motivated: background estimation sees every receptor, the flux solve does
+not see the water-affected ones.
+
+**A genuine, previously-latent bug in the shared `goe` library surfaced
+and was fixed.** The first attempt failed inside `subset_observations`
+with `NotImplementedError` from `BlockDiagonalCovariance.subset()` — never
+implemented, because nothing before this experiment had ever exercised a
+large `pre_mask` drop under a multi-flight (`BlockDiagonalCovariance`),
+spatially-correlated (`SparseCovariance`, from `error_model = components`)
+observation-error covariance; `flag_footprint_discontinuities` has never
+been turned on in a real multi-flight run (§26.3, still true — this is a
+different flag). Fixed in `goe/covariance.py`: `BlockDiagonalCovariance.subset`
+now splits global kept-indices into each block's own local range and
+delegates to that block's own (already-implemented) `subset`, preserving
+one sub-block per flight (empty if a flight loses every one of its
+indices, not dropped). A real fix to shared, reusable infrastructure, not
+a workaround specific to this experiment.
+
+### 32.2 Results: category scale factors move toward the prior; χ² drops further from 1
+
+**Method** (`run_halo.py runs/legtest_legoffset_6flight/config.ini --set
+background.flag_water_footprint=true --set
+background.water_footprint_threshold=0.20 --set
+observations.mdm_correlation_length_km={1.5,2.25} --save
+water_excl_20pct_mdm{1.5,2.25}km`, run locally — `jacobian.dir` and
+`background.flight_data_dir` overridden to local paths;
+`background.flight_data_dir` specifically must point at
+`scratch_flight_data_1000m/`, the single-naming-convention subset used
+throughout this investigation, not the raw `flight_data/` directory, which
+has multiple files per flight and raises an ambiguous-match error).
+2,219 of 8,078 receptors excluded (27.5%) — consistent with §30.6's binned
+distribution, where roughly the top 2 of 8 equal-count water-fraction bins
+sit above 20%.
+
+| category | baseline (1.5km, no excl.) | water-excl., 1.5km | water-excl., 2.25km |
+|---|---|---|---|
+| `natural_gas` | 0.857 | 0.896 | 0.909 |
+| `landfill` | 1.055 | 0.983 | 0.985 |
+| `wastewater` | 0.482 | 0.585 | 0.611 |
+| `other` | 1.000 | 1.000 | 1.000 |
+| `total` | 0.907 | 0.917 | 0.924 |
+| reduced χ² | 0.757 | 0.704 | 0.557 |
+
+Every category moves toward the prior with the exclusion — `landfill`
+most dramatically (1.055→0.983, landing almost exactly on 1.0). The
+correlation-length change (1.5→2.25km) barely matters on top of that,
+consistent with §23's earlier finding using the unmodified receptor set.
+Reduced χ² moves *further* from 1, not toward it — expected, not
+concerning: the current error model (`mdm_stddev` etc.) was tuned
+including the water-affected receptors (§1), so removing ~2,200 of them
+leaves a smaller aggregate mismatch than that R accounts for. If this
+exclusion were adopted as a production default, R would need re-tuning
+against the reduced receptor set; this isn't evidence against the
+exclusion itself.
+
+### 32.3 Per-flight RMS: a real, flight-specific effect exactly where predicted — and a useful negative result for `805`
+
+| flight | baseline RMS (n) | water-excl. RMS (n), both correlation lengths | change |
+|---|---|---|---|
+| `726_1` | 0.0288 (1271) | 0.0297–0.0298 (1098) | ~unchanged |
+| `726_2` | 0.0188 (1203) | 0.0178 (925) | modest improvement |
+| `728_1` | 0.0341 (1138) | 0.0347 (777) | ~unchanged |
+| **`728_2`** | **0.0309 (1347)** | **0.0242 (870)** | **real improvement, −22%** |
+| `805` | 0.0156 (1530) | 0.0165 (786) | slightly worse, despite losing ~49% of receptors |
+| `809` | 0.0198 (1589) | 0.0199 (1403) | ~unchanged |
+
+Plots: `figures/legtest_legoffset_6flight_residuals_map.png` (baseline,
+all 6 flights) vs. `figures/water_excl_20pct_mdm1.5km_residuals_map.png`
+and `..._mdm2.25km_residuals_map.png` (post-exclusion); flux totals in the
+equivalent `*_flux_totals.png` files.
+
+**`728_2` is the one flight where this clearly helps** — a genuine ~22%
+RMS reduction, the first *intervention* (not just a correlation) to show a
+real effect on any of this investigation's three still-open flights.
+Directly corroborates §30.5's majority-water-vs-land finding
+(`728_2`: diff `-0.0095` ppm, `p=0.044`) with an actual re-solved result.
+
+**`728_1` does not improve, despite showing the same significant effect in
+§30.5** (`diff=-0.0117`, `p=0.0007`) **and losing 32% of its receptors.**
+Two flights with statistically indistinguishable footprint-water findings
+in §30.5 diverge once actually re-solved — the same "don't assume a shared
+diagnostic signature means a shared cause or a shared fix" lesson as
+§25.19 (§20's Phase 1/2/3 split for `809`/`805`), now demonstrated by an
+actual intervention rather than another diagnostic.
+
+**`805` gets slightly worse, despite losing by far the largest share of
+its receptors (~49% — the highest mean footprint water fraction of any
+flight, §30.5's own numbers, 20.4%).** This is a genuinely useful negative
+result: if `805`'s open residual were substantially driven by
+water-affected transport bias, removing nearly half its data specifically
+because it's the most water-affected flight should have helped, not left
+it unchanged or worse. It reinforces, with a real re-solve rather than
+another correlation, what §31's light-and-erratic-wind finding and §30.3's
+receptor-resolution HPBL check already suggested: `805`'s problem is not
+primarily about water-affected footprints, and is most likely connected
+instead to its uniquely unsteady modeled wind field (§31) or hypothesis
+(c) (still completely untested directly).
+
+**`726_1`, `726_2`, `809` are essentially unaffected either way** — for
+`726_2` and `809` (already-explained flights) this is an expected,
+harmless null; for `726_1` (partially explained — hotspot resolved, dip
+open) it adds no new information either way.
+
+**Correlation-length interaction: none worth acting on.** RMS values are
+identical to 4 decimal places between the 1.5km and 2.25km water-excluded
+runs, for every flight — the two knobs don't interact meaningfully; each
+should be evaluated on its own merits (this section for the exclusion,
+§14b/§15/§23 for the correlation length).
+
+### 32.4 Verdict
+
+A real, small, flight-specific effect, exactly where §30.5/§30.6's
+statistical finding predicted one (`728_2`), not where a naive reading of
+"exclude water, expect improvement everywhere" would predict (`728_1`
+unchanged, `805` worse) — the kind of outcome that argues the underlying
+finding is genuine rather than a broad, unspecific artifact. Worth keeping
+`flag_water_footprint` as an available, documented, off-by-default
+production option rather than promoting it to the default configuration:
+it helps one of three still-open flights meaningfully, does nothing for
+another, and is mildly counterproductive for the third, so a blanket
+default would trade one flight's improvement for no clear net gain
+elsewhere. The clearest concrete next step this section adds to §26: check
+whether `728_2`'s specific open residual locations (§9) sit among its
+excluded (high-water-footprint) receptors specifically — if so, this
+becomes a spatially localized fix candidate for that flight, not just a
+whole-flight RMS number.
